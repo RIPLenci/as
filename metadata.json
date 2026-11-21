@@ -1,0 +1,6 @@
+{
+  "name": "AEGIS SECURITY",
+  "description": "Discord Anti-Raid Platform, Global Ban Protection Network & Real-Time Security Operations Dashboard.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

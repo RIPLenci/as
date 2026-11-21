@@ -1,0 +1,2573 @@
+# AEGIS SECURITY — MEGAPROMPT DEFINITIVO
+## Premium Discord Anti-Raid Platform + Global Ban Network + Dashboard + Discord Bot
+
+---
+
+# 0. INSTRUCCIÓN PRINCIPAL
+
+Quiero que desarrolles una plataforma completa de ciberseguridad especializada exclusivamente en la protección de servidores de Discord.
+
+El proyecto se llamará:
+
+# AEGIS SECURITY
+
+**Discord Security & Global Protection Network**
+
+AEGIS SECURITY estará compuesto por tres sistemas principales completamente conectados:
+
+1. Dashboard Web profesional para administrar todas las protecciones.
+2. Bot de Discord especializado en Anti-Raid y seguridad de servidores.
+3. Red Global Ban para gestionar sanciones compartidas entre servidores participantes.
+
+Quiero un producto de calidad SaaS profesional, con una identidad visual propia, una arquitectura moderna y una experiencia de usuario excelente.
+
+No quiero una plantilla, una maqueta, una simulación ni una página estática.
+
+Quiero una aplicación REAL, con backend, frontend, base de datos, autenticación Discord OAuth2, comunicación con el bot, almacenamiento persistente, caché, comandos Slash, Discord Components V2 y actualizaciones en tiempo real.
+
+## REGLAS VISUALES ABSOLUTAS
+
+**NO UTILIZAR EMOJIS.**
+
+En ninguna parte de la interfaz quiero emojis.
+
+No utilizar emojis para:
+- Menús.
+- Botones.
+- Títulos.
+- Notificaciones.
+- Estados.
+- Tarjetas.
+- Tablas.
+- Logs.
+- Comandos.
+- Mensajes del bot.
+- Pantallas de carga.
+
+Toda la iconografía debe utilizar SVG vectorial de alta calidad.
+
+Utilizar Lucide React o una librería equivalente que genere iconos SVG reales.
+
+Los iconos deben:
+- Ser vectoriales.
+- Escalar sin perder calidad.
+- Tener trazos consistentes.
+- Mantener tamaños uniformes.
+- Utilizar colores coherentes.
+- Tener estados hover.
+- Tener estados activos.
+- Estar correctamente alineados.
+- Contar con descripciones accesibles cuando corresponda.
+
+Crear un logotipo original para AEGIS SECURITY utilizando SVG.
+
+No utilizar iconos Unicode como sustitutos de SVG.
+
+No utilizar emojis de Windows, Apple, Discord ni ninguna plataforma.
+
+En Discord, donde no se admitan SVG arbitrarios como iconos de componentes, construir mensajes visuales mediante componentes nativos, tipografía, contenedores, separadores y botones. No intentar insertar código SVG en componentes que no lo admiten.
+
+---
+
+# 1. FILOSOFÍA DEL PRODUCTO
+
+AEGIS no es un bot multifunción.
+
+Es una plataforma especializada en:
+
+- Anti-Raid.
+- Anti-Nuke como protección complementaria del servidor.
+- Protección de ingresos.
+- Detección de amenazas.
+- Motor de análisis de riesgo.
+- Seguridad de servidores.
+- Cuarentena.
+- Lockdown.
+- Whitelist.
+- Global Ban.
+- Investigación de incidentes.
+- Administración de sanciones globales.
+
+Todas las páginas, módulos, gráficos y funcionalidades deben tener relación directa con estos sistemas.
+
+No agregar:
+- Economía.
+- Música.
+- Leveling.
+- Bienvenidas.
+- Sistemas de tickets generales.
+- Juegos.
+- Comandos de entretenimiento.
+- Estadísticas de mensajes sin relación con amenazas.
+- Moderación genérica que no aporte a la seguridad.
+
+El objetivo es construir un verdadero centro de operaciones de seguridad para Discord.
+
+---
+
+# 2. TECNOLOGÍAS Y LENGUAJES
+
+Quiero utilizar tecnologías modernas, estables y adecuadas para producción.
+
+No quiero mezclar lenguajes innecesariamente.
+
+## Lenguaje principal
+
+**TypeScript** será el lenguaje principal del proyecto.
+
+Utilizar TypeScript para:
+- Bot.
+- API.
+- Dashboard.
+- Servicios.
+- Controladores.
+- Modelos.
+- Validaciones.
+- Contratos de comunicación.
+
+Configurar TypeScript en modo estricto.
+
+Evitar el uso indiscriminado de any.
+
+## Backend
+
+- Node.js 26 LTS.
+- TypeScript.
+- Fastify.
+- Discord.js.
+- MongoDB.
+- Mongoose.
+- Redis.
+- Socket.IO.
+- Zod.
+- Pino para logs.
+
+## Frontend
+
+- React.
+- Vite.
+- TypeScript.
+- Tailwind CSS.
+- CSS moderno.
+- Lucide React.
+- Apache ECharts.
+- TanStack Query.
+- React Router.
+
+## Infraestructura
+
+- MongoDB Atlas.
+- Redis.
+- pnpm Workspaces.
+- Git.
+- Docker para desarrollo e infraestructura auxiliar.
+- Pterodactyl para ejecutar los servicios Node.js.
+
+Elegir siempre versiones estables y compatibles.
+
+Verificar la documentación oficial antes de instalar dependencias o utilizar APIs.
+
+Crear un archivo lockfile y fijar las versiones utilizadas para que el proyecto sea reproducible.
+
+---
+
+# 3. ARQUITECTURA GENERAL
+
+Crear una arquitectura modular y escalable.
+
+Separar completamente:
+
+1. Dashboard.
+2. API.
+3. Bot.
+4. Workers.
+5. Base de datos.
+6. Caché.
+7. Contratos compartidos.
+
+El Dashboard nunca debe conectarse directamente a MongoDB o Redis.
+
+Toda operación debe pasar por el backend.
+
+El bot tampoco debe depender del frontend.
+
+Los servicios deben comunicarse mediante API, eventos internos y Redis Pub/Sub.
+
+## Estructura sugerida
+
+aegis-security/
+
+apps/
+- dashboard/
+- api/
+- bot/
+- workers/
+
+packages/
+- shared-types/
+- validators/
+- contracts/
+- constants/
+- database/
+- security/
+
+infrastructure/
+- docker/
+- redis/
+- deployment/
+
+tests/
+- unit/
+- integration/
+- e2e/
+- load/
+
+scripts/
+.env.example
+pnpm-workspace.yaml
+package.json
+README.md
+
+Cada aplicación debe ser independiente, pero compartir tipos y contratos.
+
+---
+
+# 4. IDENTIDAD VISUAL DE AEGIS
+
+Quiero un diseño premium, moderno, tecnológico y elegante.
+
+Utilizar como inspiración estructural la imagen de referencia que proporcioné anteriormente.
+
+No copiar literalmente su diseño. Mejorarlo considerablemente y adaptar todo el contenido a AEGIS.
+
+## Paleta visual
+
+Crear un sistema de diseño con:
+
+- Negro grafito para el fondo.
+- Negro azulado para la navegación.
+- Gris oscuro para las tarjetas.
+- Violeta eléctrico como color principal.
+- Azul tecnológico como color secundario.
+- Verde para protección activa.
+- Amarillo para alertas.
+- Rojo para amenazas críticas.
+- Blanco y grises para tipografía.
+
+Evitar colores excesivamente saturados.
+
+Utilizar gradientes moderados.
+
+## Layout
+
+Crear una estructura con:
+
+- Sidebar fija y expandible.
+- Barra superior.
+- Selector de servidor.
+- Buscador global.
+- Selector de idioma.
+- Perfil del usuario.
+- Área central de contenido.
+- Sistema de notificaciones.
+- Indicador de conexión.
+
+La sidebar debe tener categorías claramente diferenciadas.
+
+Las páginas deben mantener un ancho y espaciado coherentes.
+
+## Tipografía
+
+Utilizar una tipografía moderna y legible.
+
+Crear diferentes jerarquías:
+- Títulos principales.
+- Subtítulos.
+- Encabezados de tarjetas.
+- Texto secundario.
+- Etiquetas.
+- Datos numéricos.
+
+Los números de estadísticas deben utilizar cifras tabulares para mantener la alineación.
+
+## Iconografía SVG
+
+Utilizar exclusivamente iconos SVG para la interfaz.
+
+Implementar:
+- Lucide React.
+- Componentes SVG propios para la identidad.
+- Tamaños estandarizados.
+- Stroke width consistente.
+- Colores heredados mediante currentColor.
+
+No descargar iconos PNG para sustituir la iconografía.
+
+No utilizar iconos de fuentes de texto.
+
+No utilizar emojis bajo ninguna circunstancia.
+
+## Animaciones
+
+Crear:
+- Transiciones entre rutas.
+- Animaciones suaves de entrada.
+- Hover de tarjetas.
+- Animaciones de gráficos.
+- Skeleton loaders.
+- Transiciones de modales.
+- Animaciones discretas de estado.
+- Indicadores de conexión.
+- Feedback visual de botones.
+
+Las animaciones deben utilizar CSS y las herramientas adecuadas.
+
+Evitar re-renderizados innecesarios.
+
+Respetar prefers-reduced-motion.
+
+## Temas
+
+Incluir:
+
+- Dark Mode.
+- Light Mode.
+- System Mode.
+
+Guardar las preferencias del usuario.
+
+Todos los componentes deben adaptarse correctamente a ambos temas.
+
+---
+
+# 5. AUTENTICACIÓN CON DISCORD — SISTEMA OBLIGATORIO
+
+Esta funcionalidad es una de las más importantes del proyecto.
+
+Quiero que el usuario pueda entrar al Dashboard utilizando directamente su cuenta de Discord.
+
+No crear un sistema de registro tradicional con usuario y contraseña como mecanismo principal.
+
+No crear contraseñas ficticias.
+
+No solicitar la contraseña de Discord.
+
+La identidad del usuario debe verificarse mediante Discord OAuth2.
+
+## 5.1 Pantalla de inicio de sesión
+
+Crear una página de acceso profesional.
+
+Diseño:
+
+- Fondo oscuro.
+- Logotipo SVG de AEGIS.
+- Nombre AEGIS SECURITY.
+- Descripción del servicio.
+- Botón de inicio de sesión con Discord.
+- Información sobre la vinculación.
+- Aviso de seguridad.
+- Animaciones suaves.
+
+Título:
+
+AEGIS SECURITY
+
+Subtítulo:
+
+Advanced protection for your Discord community.
+
+Botón principal:
+
+**Continue with Discord**
+
+Utilizar el logotipo oficial de Discord mediante un recurso SVG autorizado.
+
+No utilizar un emoji como icono del botón.
+
+## 5.2 Inicio de sesión OAuth2
+
+Implementar un flujo OAuth2 Authorization Code real.
+
+Solicitar únicamente los permisos OAuth necesarios.
+
+Scopes principales:
+
+- identify
+- guilds
+
+El backend debe gestionar:
+- Redirección.
+- State aleatorio y seguro.
+- Validación CSRF.
+- Intercambio del authorization code.
+- Obtención de identidad.
+- Obtención de servidores.
+- Creación de sesión.
+- Renovación o expiración de tokens cuando corresponda.
+- Cierre de sesión.
+
+Utilizar URI de redirección registrada y validada.
+
+Si el flujo y la plataforma lo permiten, incorporar PKCE como protección adicional.
+
+Nunca colocar Client Secret ni Bot Token en el frontend.
+
+Nunca guardar access tokens en localStorage.
+
+Utilizar cookies seguras HttpOnly, Secure y SameSite apropiadas.
+
+No compartir ni enviar tokens de usuario a Discord a través del bot.
+
+## 5.3 Datos del usuario
+
+Después de iniciar sesión, consultar los datos autorizados de Discord.
+
+Obtener:
+- Discord User ID.
+- Username.
+- Global Name cuando esté disponible.
+- Avatar.
+- Servidores accesibles.
+- Permisos disponibles.
+- Estado de sesión.
+
+Mostrar el avatar de Discord.
+
+Mostrar el nombre de usuario.
+
+Guardar una referencia segura de la identidad del usuario en MongoDB.
+
+No almacenar información personal innecesaria.
+
+## 5.4 Pantalla de bienvenida
+
+Una vez autenticado:
+
+Mostrar una animación premium de bienvenida.
+
+Ejemplo:
+
+Welcome back
+
+[Nombre del usuario]
+
+Preparing your security workspace...
+
+Mostrar el avatar.
+
+Realizar una transición elegante hacia el Dashboard.
+
+No utilizar una pantalla de carga infinita.
+
+Si ocurre un error, mostrar un mensaje claro y una opción de volver a intentar.
+
+---
+
+# 6. VINCULAR LA CUENTA DE DISCORD CON EL BOT
+
+Quiero que el sistema de vinculación esté completamente implementado.
+
+No confundir:
+
+- Iniciar sesión en el Dashboard.
+- Autorizar la instalación del bot.
+- Vincular un servidor con AEGIS.
+
+Son procesos diferentes que deben estar coordinados.
+
+## 6.1 Flujo de vinculación
+
+El usuario inicia sesión mediante Discord OAuth2.
+
+Después, el sistema obtiene sus servidores y determina:
+
+- En cuáles es propietario.
+- En cuáles tiene permiso Manage Guild.
+- En cuáles tiene permisos insuficientes.
+- En cuáles está instalado AEGIS.
+- En cuáles no está instalado.
+
+Crear una página denominada:
+
+My Discord Servers
+
+Mostrar los servidores en tarjetas.
+
+Cada tarjeta debe incluir:
+- Icono.
+- Nombre.
+- Discord ID.
+- Rol o permisos del usuario.
+- Estado del bot.
+- Estado de protección.
+- Acción disponible.
+
+Estados visuales:
+
+BOT CONNECTED
+
+BOT NOT INSTALLED
+
+INSUFFICIENT PERMISSIONS
+
+PROTECTION ENABLED
+
+PROTECTION DISABLED
+
+Utilizar etiquetas textuales con indicadores SVG o CSS.
+
+No utilizar emojis para representar estados.
+
+## 6.2 Instalar el bot
+
+Cuando un servidor no tenga AEGIS instalado:
+
+Mostrar un botón:
+
+**Add AEGIS to Server**
+
+El botón debe generar o abrir el enlace oficial de instalación de la aplicación Discord.
+
+Utilizar los scopes necesarios:
+
+- bot
+- applications.commands
+
+Solicitar únicamente los permisos necesarios para las funciones habilitadas.
+
+El usuario debe seleccionar el servidor y autorizar la instalación con los permisos adecuados.
+
+## 6.3 Confirmación de instalación
+
+Después de finalizar la autorización:
+
+No confiar únicamente en el parámetro guild_id enviado en la redirección.
+
+El backend debe verificar mediante Discord API, utilizando la identidad del bot, si realmente está instalado en el servidor seleccionado.
+
+Verificar:
+- Guild ID.
+- Estado de la aplicación.
+- Pertenencia del bot.
+- Estado de conexión.
+- Permisos del bot.
+- Permisos del usuario.
+
+Cuando se confirme:
+
+Mostrar:
+
+AEGIS successfully connected.
+
+Server:
+[Nombre del servidor]
+
+Bot:
+Online
+
+Security:
+Ready to configure.
+
+Crear el registro correspondiente en MongoDB.
+
+## 6.4 Seleccionar servidor
+
+Cuando el usuario tenga varios servidores:
+
+Permitir seleccionar uno desde un menú superior.
+
+Al cambiar de servidor:
+- Cambiar configuraciones.
+- Cambiar estadísticas.
+- Cambiar incidentes.
+- Cambiar protecciones.
+- Cambiar whitelist.
+- Actualizar estado del bot.
+
+Nunca mezclar datos entre servidores.
+
+## 6.5 Vinculación permanente
+
+Mantener la relación entre:
+
+- Discord User ID.
+- Dashboard User.
+- Guild ID.
+- Configuración.
+- Estado de instalación.
+- Permisos de acceso.
+
+Cuando un usuario deje de tener permisos de administración, volver a verificar su autorización y restringir el acceso al servidor.
+
+Cuando el bot sea retirado de un servidor, marcarlo como desconectado.
+
+No permitir que el Dashboard siga mostrando una protección activa cuando el bot ya no está instalado.
+
+## 6.6 Seguridad de vinculación
+
+Nunca aceptar que el frontend decida a qué servidor tiene acceso el usuario.
+
+Verificar todos los permisos en el backend.
+
+Comprobar pertenencia y permisos con datos de Discord.
+
+Utilizar controles anti-IDOR.
+
+No confiar en identificadores recibidos desde el navegador.
+
+---
+
+# 7. SISTEMA DE PERMISOS DEL DASHBOARD
+
+Crear un sistema RBAC.
+
+Roles principales:
+
+OWNER
+GLOBAL ADMINISTRATOR
+GLOBAL MODERATOR
+SERVER ADMINISTRATOR
+SERVER MODERATOR
+VIEWER
+
+Los permisos globales deben ser independientes de los permisos particulares de cada servidor.
+
+Permitir configurar:
+- Acceso al Overview.
+- Consultar Anti-Raid.
+- Modificar Anti-Raid.
+- Activar Lockdown.
+- Gestionar cuarentenas.
+- Consultar Global Ban.
+- Crear Global Ban.
+- Retirar Global Ban.
+- Administrar apelaciones.
+- Consultar logs.
+- Administrar moderadores.
+
+Verificar permisos en cada operación del backend.
+
+Ocultar elementos sin autorización en el frontend, pero nunca utilizar esa ocultación como mecanismo de seguridad.
+
+El acceso Owner debe estar protegido por configuración administrativa del backend.
+
+---
+
+# 8. SIDEBAR COMPLETA
+
+La navegación debe ser clara y especializada.
+
+Crear exactamente esta estructura inicial.
+
+## GENERAL
+
+- Overview
+- Discord Servers
+- Real-Time Monitor
+- Security Incidents
+
+## ANTI-RAID PROTECTION
+
+- Protection Overview
+- Join Protection
+- Anti-Nuke Protection
+- Risk Engine
+- Quarantine
+- Emergency Lockdown
+- Whitelist
+
+## GLOBAL SECURITY
+
+- Global Ban Overview
+- Global Ban Database
+- Add Global Ban
+- Sanction History
+- Appeals
+- Participating Servers
+- Global Moderators
+
+## SYSTEM
+
+- Discord Bot
+- Integrations
+- Audit Logs
+- Permissions
+- Settings
+
+Todas las páginas deben implementarse.
+
+No dejar elementos sin funcionamiento.
+
+No agregar secciones de otras categorías.
+
+---
+
+# 9. OVERVIEW — CENTRO DE OPERACIONES
+
+Crear un Dashboard basado en la distribución de la imagen de referencia.
+
+Esta página debe mostrar el estado general de AEGIS.
+
+## Encabezado
+
+Mostrar:
+
+Overview
+
+Real-time protection statistics, security incidents and global network activity.
+
+En el lado derecho:
+- Estado de conexión.
+- Selector de idioma.
+- Perfil.
+- Notificaciones.
+
+## Períodos
+
+Crear selector horizontal:
+
+- 24 Hours.
+- 7 Days.
+- 30 Days.
+- 90 Days.
+
+Los datos deben cambiar realmente al seleccionar el período.
+
+## Tarjetas estadísticas
+
+Crear ocho tarjetas en dos filas.
+
+Primera fila:
+
+1. Total Raids Detected.
+2. Attacks Prevented.
+3. Suspicious Joins.
+4. Critical Incidents.
+
+Segunda fila:
+
+5. Users Quarantined.
+6. Active Protection.
+7. Global Bans Applied.
+8. Participating Servers.
+
+Cada tarjeta debe incluir:
+- Icono SVG.
+- Título.
+- Valor.
+- Porcentaje de variación.
+- Período de comparación.
+- Información adicional.
+
+Las variaciones deben compararse con períodos equivalentes.
+
+No inventar porcentajes.
+
+Si no hay datos suficientes, mostrar N/A.
+
+## Gráfico Security Activity
+
+Gráfico de líneas que muestre:
+
+- Detected Raids.
+- Prevented Attacks.
+- Suspicious Joins.
+- Critical Events.
+
+Permitir activar y desactivar las series.
+
+Mostrar tooltips.
+
+Permitir modificar el período.
+
+## Gráfico Threat Distribution
+
+Gráfico circular con:
+- Raid Attempts.
+- Suspicious Accounts.
+- Quarantined Users.
+- Global Ban Matches.
+
+Los porcentajes deben calcularse desde los registros reales.
+
+## Tabla Recent Incidents
+
+Mostrar:
+
+- Incident ID.
+- Server.
+- Threat Type.
+- Risk Level.
+- Affected User.
+- Applied Action.
+- Date.
+- Status.
+
+Agregar filtros y paginación.
+
+## Información en tiempo real
+
+Mostrar:
+- Bot Status.
+- API Status.
+- MongoDB Status.
+- Redis Status.
+- Last Synchronization.
+
+Los estados deben provenir de comprobaciones reales.
+
+---
+
+# 10. ANTI-RAID — SISTEMA PRINCIPAL
+
+Crear una sección completa dedicada a configurar y visualizar el sistema Anti-Raid.
+
+## 10.1 Protección general
+
+Mostrar:
+- Estado actual.
+- Servidor.
+- Fecha de activación.
+- Modo.
+- Eventos procesados.
+- Ataques detectados.
+- Ataques detenidos.
+- Nivel de sensibilidad.
+
+Crear interruptor principal de protección.
+
+Al activarlo:
+- Validar permisos.
+- Verificar que el bot esté online.
+- Validar que los permisos requeridos estén disponibles.
+- Guardar cambios.
+- Sincronizar con el bot.
+
+No mostrar protección activa si el bot no ha confirmado la configuración.
+
+## 10.2 Modos de protección
+
+NORMAL
+
+- Protección estándar.
+- Análisis de entradas.
+- Detección de patrones.
+- Alertas.
+
+STRICT
+
+- Sensibilidad superior.
+- Umbrales ajustados.
+- Protección más exigente.
+- Cuarentena según riesgo.
+
+EMERGENCY
+
+- Protección de emergencia.
+- Restricciones configuradas.
+- Detección reforzada.
+- Registro prioritario.
+- Notificación inmediata.
+
+Permitir configurar cada modo.
+
+Los modos no deben ejecutar sanciones indiscriminadas.
+
+## 10.3 Join Protection
+
+Crear configuraciones para:
+
+- Maximum Joins.
+- Time Window.
+- Minimum Account Age.
+- Suspicious Account Detection.
+- Bot Join Detection.
+- Join Pattern Detection.
+- Burst Detection.
+- Risk Threshold.
+
+Ejemplo:
+
+Maximum Joins: 8
+
+Time Window: 10 seconds
+
+Minimum Account Age: 7 days
+
+Risk Threshold: 70
+
+Action: Quarantine
+
+Todos los parámetros deben ser configurables.
+
+## 10.4 Detector inteligente
+
+Implementar un motor de detección con diferentes señales.
+
+Detectar:
+- Ingresos masivos.
+- Entradas repetitivas.
+- Oleadas de cuentas nuevas.
+- Patrones temporales anormales.
+- Actividad coordinada.
+- Coincidencias con sanciones globales activas.
+
+Utilizar ventanas temporales eficientes.
+
+Implementar contadores distribuidos.
+
+No basar todo el sistema en un único límite de ingresos.
+
+## 10.5 Risk Engine
+
+Crear un motor de riesgo explicable.
+
+Utilizar una escala de 0 a 100.
+
+Ejemplo inicial:
+
+0-24: LOW
+
+25-49: MODERATE
+
+50-74: HIGH
+
+75-100: CRITICAL
+
+Las señales pueden incluir:
+
+- Antigüedad de cuenta.
+- Patrón de entrada.
+- Volumen de eventos.
+- Comportamiento repetitivo.
+- Coincidencia con Global Ban.
+
+Cada evaluación debe guardar qué señales contribuyeron al resultado.
+
+Permitir configurar ponderaciones.
+
+Evitar puntuaciones arbitrarias.
+
+No aplicar sanciones graves basándose únicamente en la antigüedad de una cuenta.
+
+## 10.6 Acciones automáticas
+
+Permitir elegir:
+
+- Log Only.
+- Alert.
+- Quarantine.
+- Timeout.
+- Kick.
+- Ban.
+
+Crear reglas independientes por nivel de riesgo.
+
+Ejemplo:
+
+Moderate:
+Log + Alert.
+
+High:
+Quarantine.
+
+Critical:
+Quarantine + Emergency Alert.
+
+Las expulsiones y baneos deben requerir condiciones robustas y validaciones adicionales.
+
+## 10.7 Configuración de alertas
+
+Permitir configurar:
+- Canal de alertas.
+- Eventos.
+- Severidad.
+- Menciones autorizadas.
+- Frecuencia.
+- Agrupación de eventos.
+
+Evitar enviar cientos de mensajes cuando hay muchos eventos simultáneos.
+
+Implementar deduplicación y agrupación.
+
+---
+
+# 11. ANTI-NUKE PROTECTION
+
+Crear una protección complementaria dentro del módulo Anti-Raid.
+
+Detectar:
+- Eliminaciones masivas de canales.
+- Creaciones masivas de canales.
+- Eliminaciones de roles.
+- Creaciones masivas de roles.
+- Modificaciones peligrosas de permisos.
+- Webhooks sospechosos.
+- Baneos masivos.
+- Expulsiones masivas.
+- Cambios administrativos anormales.
+
+Analizar registros de auditoría de Discord.
+
+Relacionar correctamente:
+- Acción.
+- Ejecutor.
+- Objetivo.
+- Timestamp.
+- Contexto.
+
+No atribuir automáticamente acciones sin suficiente evidencia.
+
+## Protección de administradores
+
+Crear lista de administradores autorizados.
+
+Permitir excepciones específicas.
+
+Nunca confiar únicamente en el nombre de usuario o en el rol recibido desde el frontend.
+
+Validar IDs y permisos.
+
+## Respuesta automática
+
+Permitir:
+- Registrar.
+- Alertar.
+- Retirar permisos mediante acciones reversibles.
+- Aplicar cuarentena cuando sea posible.
+- Ejecutar medidas administrativas seleccionadas.
+- Activar Lockdown.
+
+Comprobar jerarquía de roles y permisos reales.
+
+No intentar ejecutar acciones que Discord no permita.
+
+---
+
+# 12. QUARANTINE SYSTEM
+
+Crear un módulo profesional.
+
+Mostrar:
+- Avatar.
+- Username.
+- Discord ID.
+- Servidor.
+- Motivo.
+- Riesgo.
+- Fecha.
+- Moderador o sistema responsable.
+- Estado.
+
+Acciones:
+- Consultar.
+- Liberar.
+- Modificar duración.
+- Ver incidente.
+- Consultar historial.
+
+Crear una configuración de rol de cuarentena.
+
+Guardar el estado previo cuando se deban realizar restauraciones.
+
+No sobrescribir cambios administrativos realizados posteriormente.
+
+Registrar todas las liberaciones.
+
+---
+
+# 13. EMERGENCY LOCKDOWN
+
+Crear un sistema de emergencia.
+
+Permitir:
+- Activación manual.
+- Activación automática.
+- Duración.
+- Canales afectados.
+- Roles afectados.
+- Restricciones específicas.
+- Avisos.
+- Restauración.
+
+Antes de modificar permisos, crear un snapshot de los valores originales.
+
+Restaurar exclusivamente los cambios administrados por AEGIS.
+
+Detectar modificaciones posteriores realizadas por administradores.
+
+No sobrescribir los cambios legítimos de otras personas.
+
+Crear un registro completo del Lockdown.
+
+Permitir finalizarlo desde el Dashboard o Discord.
+
+---
+
+# 14. WHITELIST
+
+Crear una lista blanca.
+
+Admitir:
+- Usuarios.
+- Roles.
+- Bots.
+- Excepciones específicas.
+
+Campos:
+- ID.
+- Tipo.
+- Motivo.
+- Autor.
+- Fecha.
+- Expiración.
+- Estado.
+
+Permitir:
+- Añadir.
+- Eliminar.
+- Modificar.
+- Buscar.
+- Filtrar.
+- Consultar.
+
+La whitelist solo debe excluir de las reglas expresamente configuradas.
+
+No debe permitir saltarse indiscriminadamente todos los controles del sistema.
+
+---
+
+# 15. GLOBAL BAN — RED DE SEGURIDAD
+
+Crear el sistema Global Ban como uno de los dos módulos centrales de AEGIS.
+
+Debe ser independiente de los datos particulares de cada servidor.
+
+La información global debe gestionarse mediante MongoDB y una API segura.
+
+## 15.1 Global Ban Overview
+
+Crear tarjetas:
+
+- Total Global Bans.
+- Active Sanctions.
+- Permanent Bans.
+- Temporary Bans.
+- Pending Appeals.
+- Participating Servers.
+- Expiring Soon.
+- Sanctions This Month.
+
+Crear gráficos:
+
+- Global Ban Activity.
+- Permanent vs Temporary.
+- Sanctions Timeline.
+- Appeals Overview.
+
+No inventar datos.
+
+## 15.2 Base de datos Global Ban
+
+Crear una tabla profesional.
+
+Columnas:
+
+- Discord User ID.
+- Username disponible.
+- Reason.
+- Category.
+- Severity.
+- Sanction Type.
+- Creation Date.
+- Expiration Date.
+- Moderator.
+- Status.
+
+Filtros:
+- Active.
+- Expired.
+- Revoked.
+- Permanent.
+- Temporary.
+- Pending Appeal.
+
+Búsqueda:
+- Discord ID.
+- Username.
+- Motivo.
+- Moderador.
+- Fecha.
+
+## 15.3 Crear sanción
+
+Crear un formulario profesional.
+
+Campos:
+
+- Discord ID.
+- Motivo.
+- Descripción.
+- Categoría.
+- Severidad.
+- Evidencia.
+- Duración.
+- Fecha de vencimiento.
+- Moderador.
+
+Tipos:
+
+- Permanent.
+- Temporary.
+
+Agregar revisión antes de confirmar.
+
+Para sanciones permanentes, implementar autorización reforzada y revisión de evidencia según la política de la red.
+
+Una detección Anti-Raid no debe convertirse automáticamente en un Global Ban.
+
+Las sanciones globales requieren revisión y autorización independientes.
+
+## 15.4 Consultar sanciones
+
+Crear una ficha por usuario.
+
+Mostrar:
+- Discord ID.
+- Username registrado.
+- Sanción actual.
+- Historial.
+- Motivo.
+- Evidencia.
+- Moderador.
+- Fecha.
+- Vencimiento.
+- Estado.
+- Apelaciones.
+
+## 15.5 Retirar sanciones
+
+Permitir retirar una sanción.
+
+Solicitar:
+- Motivo.
+- Responsable.
+- Confirmación.
+
+Registrar la retirada.
+
+No borrar el historial.
+
+## 15.6 Expiración
+
+Crear un worker que gestione sanciones temporales.
+
+Cuando expire una sanción:
+- Cambiar su estado.
+- Invalidar cachés.
+- Publicar eventos.
+- Sincronizar servicios.
+- Registrar la expiración.
+- Evitar futuras aplicaciones.
+
+No depender exclusivamente de consultas periódicas a toda la colección.
+
+Utilizar tareas programadas y datos indexados.
+
+## 15.7 Servidores participantes
+
+La red Global Ban debe funcionar con participación voluntaria.
+
+Cada servidor debe configurar:
+
+- Global Ban Enabled.
+- Enforcement Mode.
+- Action Policy.
+- Notification Channel.
+- Synchronization Status.
+
+Nunca aplicar sanciones globales en servidores que no participen expresamente.
+
+Permitir desactivar la participación.
+
+Separar claramente las sanciones globales de las sanciones locales.
+
+---
+
+# 16. SISTEMA DE APELACIONES
+
+Crear una página específica.
+
+Estados:
+
+- Pending.
+- Reviewing.
+- Approved.
+- Rejected.
+
+Mostrar:
+- Apelación.
+- Usuario.
+- Sanción.
+- Motivo.
+- Evidencia adjunta.
+- Fecha.
+- Revisor.
+- Resultado.
+
+Permitir:
+- Consultar.
+- Asignar.
+- Aprobar.
+- Rechazar.
+- Añadir observaciones.
+
+Cuando se apruebe una apelación:
+- Ejecutar la retirada correspondiente.
+- Invalidar caché.
+- Sincronizar servidores participantes.
+- Registrar auditoría.
+
+No eliminar la sanción original.
+
+Crear medidas anti-spam para apelaciones.
+
+---
+
+# 17. GLOBAL MODERATOR MANAGEMENT
+
+Crear una página de moderadores globales.
+
+Campos:
+- Avatar.
+- Discord ID.
+- Nombre.
+- Rol.
+- Fecha de incorporación.
+- Estado.
+- Acciones permitidas.
+
+Funciones:
+- Añadir.
+- Retirar.
+- Cambiar permisos.
+- Consultar historial.
+
+Requerir permisos de administración global.
+
+Registrar todos los cambios.
+
+Crear un sistema de auditoría para detectar uso indebido de permisos.
+
+Opcionalmente, implementar doble aprobación para operaciones de máxima importancia.
+
+---
+
+# 18. REAL-TIME MONITOR
+
+Crear una página tipo centro de operaciones.
+
+Mostrar eventos de seguridad en tiempo real.
+
+Información:
+- Timestamp.
+- Guild ID.
+- Tipo de evento.
+- Usuario.
+- Riesgo.
+- Acción.
+- Estado.
+
+Utilizar Socket.IO.
+
+Implementar:
+- Reconexión.
+- Heartbeat.
+- Deduplicación.
+- Control de eventos.
+- Paginación.
+- Filtros.
+- Pausa visual.
+- Exportación autorizada.
+
+No generar eventos ficticios.
+
+Cuando la conexión se pierda, mostrar claramente el estado offline.
+
+---
+
+# 19. INCIDENT MANAGEMENT
+
+Crear una gestión completa de incidentes.
+
+Cada incidente debe tener:
+- ID.
+- Servidor.
+- Fecha.
+- Usuario afectado.
+- Usuario responsable, si se conoce.
+- Tipo.
+- Risk Score.
+- Evidencia.
+- Acciones.
+- Estado.
+- Responsable de investigación.
+
+Estados:
+
+OPEN
+INVESTIGATING
+MITIGATED
+RESOLVED
+FALSE POSITIVE
+
+Permitir:
+- Asignar.
+- Añadir comentarios.
+- Revisar.
+- Resolver.
+- Consultar historial.
+
+Mantener un historial inalterable de eventos originales.
+
+---
+
+# 20. SISTEMA DE CACHÉ Y RENDIMIENTO
+
+La prioridad técnica de AEGIS es responder a los eventos rápidamente.
+
+Implementar arquitectura de caché por niveles.
+
+## L1: Memory Cache
+
+Guardar información frecuentemente utilizada:
+
+- Configuración Anti-Raid.
+- Whitelist.
+- Roles autorizados.
+- Umbrales.
+- Estado de protección.
+- Configuración de acciones.
+- Sanciones globales activas.
+
+Implementar:
+- TTL.
+- Límite de memoria.
+- Invalidación.
+- Actualización.
+- Prevención de memory leaks.
+- Protección contra datos obsoletos.
+
+## L2: Redis
+
+Utilizar Redis para:
+- Contadores distribuidos.
+- Ventanas temporales.
+- Pub/Sub.
+- Locks distribuidos.
+- Rate limiting.
+- Coordinación entre procesos.
+- Invalidación de caché.
+- Eventos.
+- Tareas programadas.
+
+Utilizar operaciones atómicas.
+
+Cuando resulte adecuado, utilizar scripts Lua para calcular límites de eventos sin condiciones de carrera.
+
+## L3: MongoDB
+
+MongoDB será la fuente persistente de verdad.
+
+Guardar:
+- Configuraciones.
+- Usuarios.
+- Servidores.
+- Incidentes.
+- Sanciones.
+- Apelaciones.
+- Historial.
+- Auditoría.
+
+## Optimización
+
+Implementar:
+- Procesamiento asíncrono.
+- Colas limitadas.
+- Control de concurrencia.
+- Idempotencia.
+- Escrituras agrupadas para métricas no críticas.
+- Persistencia prioritaria para sanciones y acciones sensibles.
+- Índices.
+- Consultas optimizadas.
+- Prevención de N+1.
+- Gestión de errores.
+
+No consultar MongoDB en cada ingreso de usuario.
+
+No bloquear el event loop.
+
+No ejecutar operaciones pesadas dentro de los listeners de Discord.
+
+## Degradación segura
+
+Cuando Redis falle:
+- Informar estado.
+- Activar límites locales conservadores.
+- No realizar sanciones de alto impacto basadas en datos incompletos.
+- Evitar asumir que otras instancias están sincronizadas.
+- Restaurar sincronización cuando el servicio vuelva.
+
+---
+
+# 21. SINCRONIZACIÓN DASHBOARD - BOT
+
+La sincronización debe funcionar sin reiniciar el bot.
+
+Ejemplo:
+
+Un administrador modifica Maximum Joins de 8 a 12.
+
+Proceso:
+
+1. El frontend envía la solicitud.
+2. Fastify autentica la sesión.
+3. El backend verifica permisos.
+4. Zod valida los datos.
+5. MongoDB persiste.
+6. Redis publica el evento.
+7. Las instancias invalidan su caché.
+8. El bot aplica la nueva configuración.
+9. Se confirma el resultado.
+10. WebSocket informa al Dashboard.
+
+Implementar confirmación de cambios.
+
+No mostrar éxito antes de que el backend confirme.
+
+Si una instancia no recibe la actualización, debe existir un mecanismo de reconciliación.
+
+---
+
+# 22. SISTEMA DE DISCORD BOT
+
+El bot debe estar desarrollado con TypeScript y Discord.js.
+
+Debe conectarse a MongoDB y Redis mediante servicios correctamente separados.
+
+No duplicar conexiones de base de datos.
+
+No crear listeners repetidos.
+
+No registrar comandos duplicados.
+
+Implementar:
+- Comandos Slash.
+- Eventos.
+- Servicios.
+- Caché.
+- Detectores.
+- Sistemas de protección.
+- Logs.
+- Manejo de errores.
+- Reintentos.
+
+Utilizar únicamente Gateway Intents necesarios.
+
+El acceso a eventos de miembros requiere configurar los intents y permisos correspondientes en Discord Developer Portal.
+
+No habilitar Message Content si la funcionalidad implementada no lo necesita.
+
+Documentar los permisos privilegiados requeridos.
+
+---
+
+# 23. COMANDOS SLASH
+
+Crear los siguientes comandos.
+
+## ANTI-RAID
+
+/antiraid status
+
+/antiraid enable
+
+/antiraid disable
+
+/antiraid mode
+
+/antiraid config
+
+/antiraid test
+
+/antiraid incidents
+
+Ejemplos:
+
+/antiraid enable
+
+/antiraid mode mode:strict
+
+/antiraid config joins:8 window:10
+
+## ANTI-NUKE
+
+/antinuke status
+
+/antinuke enable
+
+/antinuke disable
+
+/antinuke config
+
+/antinuke incidents
+
+## QUARANTINE
+
+/quarantine add
+
+/quarantine release
+
+/quarantine list
+
+/quarantine info
+
+## LOCKDOWN
+
+/lockdown activate
+
+/lockdown deactivate
+
+/lockdown status
+
+/lockdown config
+
+## WHITELIST
+
+/whitelist add
+
+/whitelist remove
+
+/whitelist list
+
+/whitelist check
+
+## GLOBAL BAN
+
+/globalban add
+
+/globalban remove
+
+/globalban check
+
+/globalban history
+
+/globalban appeal
+
+/globalban list
+
+/globalban details
+
+## AEGIS
+
+/aegis panel
+
+/aegis status
+
+/aegis diagnostics
+
+/aegis help
+
+Todos los comandos deben funcionar realmente.
+
+Crear un sistema uniforme de:
+- Validaciones.
+- Permisos.
+- Respuestas.
+- Errores.
+- Logs.
+- Auditoría.
+- Confirmaciones.
+
+---
+
+# 24. DISCORD COMPONENTS V2
+
+Todos los paneles interactivos principales del bot deben utilizar Discord Components V2.
+
+Implementar la API oficial disponible para la versión instalada de Discord.js.
+
+Utilizar:
+- Container.
+- Text Display.
+- Section.
+- Separator.
+- Thumbnail.
+- Media Gallery cuando corresponda.
+- Action Row.
+- Button.
+- Select Menu.
+
+Utilizar correctamente MessageFlags.IsComponentsV2.
+
+Respetar las restricciones del modo Components V2: no utilizar embeds tradicionales ni el campo content como sustitutos del contenido V2 cuando ese modo esté activado.
+
+No intentar representar iconos SVG arbitrarios dentro de botones de Discord, porque los componentes no admiten ese uso.
+
+Las respuestas deben mantener una identidad visual sin emojis.
+
+## Ejemplo: panel Anti-Raid
+
+Título:
+
+AEGIS SECURITY
+
+Descripción:
+
+Server Protection Center
+
+Sección:
+
+Protection Status: ACTIVE
+
+Server:
+Nombre del servidor.
+
+Mode:
+STRICT
+
+Security Modules:
+- Join Protection: Enabled.
+- Anti-Nuke: Enabled.
+- Risk Engine: Active.
+- Quarantine: Ready.
+- Emergency Lockdown: Inactive.
+
+Botones:
+- Configuration.
+- Incidents.
+- Protection Status.
+- Refresh.
+
+## Ejemplo: alerta
+
+AEGIS SECURITY — CRITICAL INCIDENT
+
+Potential raid detected.
+
+Server:
+Nombre del servidor.
+
+Activity:
+15 joins detected within 10 seconds.
+
+Configured threshold:
+8 joins.
+
+Risk Score:
+89/100.
+
+Action:
+Quarantine activated.
+
+Status:
+Incident registered.
+
+## Ejemplo: Global Ban
+
+AEGIS GLOBAL SECURITY
+
+Sanction detected.
+
+Discord User ID:
+123456789
+
+Sanction Type:
+Temporary
+
+Status:
+Active
+
+Expiration:
+Fecha correspondiente.
+
+Los componentes deben actualizarse según el resultado real.
+
+No utilizar botones decorativos.
+
+Validar siempre permisos y contexto de servidor.
+
+---
+
+# 25. API BACKEND
+
+Crear una API REST estructurada.
+
+Endpoints sugeridos:
+
+## Authentication
+
+POST /api/auth/discord
+
+GET /api/auth/callback
+
+GET /api/auth/session
+
+POST /api/auth/logout
+
+GET /api/auth/servers
+
+## Servers
+
+GET /api/guilds
+
+GET /api/guilds/:guildId
+
+GET /api/guilds/:guildId/status
+
+GET /api/guilds/:guildId/config
+
+## Anti-Raid
+
+GET /api/guilds/:guildId/antiraid
+
+PATCH /api/guilds/:guildId/antiraid
+
+POST /api/guilds/:guildId/antiraid/test
+
+POST /api/guilds/:guildId/antiraid/enable
+
+POST /api/guilds/:guildId/antiraid/disable
+
+## Incidents
+
+GET /api/incidents
+
+GET /api/incidents/:incidentId
+
+PATCH /api/incidents/:incidentId
+
+## Quarantine
+
+GET /api/quarantine
+
+POST /api/quarantine
+
+DELETE /api/quarantine/:id
+
+## Global Ban
+
+GET /api/globalban
+
+POST /api/globalban
+
+GET /api/globalban/:id
+
+POST /api/globalban/:id/revoke
+
+## Appeals
+
+GET /api/appeals
+
+POST /api/appeals
+
+PATCH /api/appeals/:id
+
+## System
+
+GET /api/health
+
+GET /api/health/ready
+
+GET /api/health/live
+
+Validar todos los parámetros.
+
+Validar cada petición.
+
+Implementar autorización por servidor y por función.
+
+Utilizar respuestas estructuradas y códigos HTTP correctos.
+
+No devolver secretos.
+
+---
+
+# 26. MODELOS MONGODB
+
+Crear modelos completos para:
+
+Users
+DiscordAccounts
+Guilds
+GuildSettings
+AntiRaidConfigs
+AntiNukeConfigs
+RiskAssessments
+SecurityIncidents
+SecurityEvents
+QuarantineEntries
+WhitelistEntries
+GlobalBans
+GlobalBanAppeals
+GlobalModerators
+GuildParticipation
+AuditLogs
+Notifications
+LockdownStates
+SystemSettings
+
+Todos deben tener:
+- Tipos.
+- Validaciones.
+- Índices.
+- Fechas.
+- Estados.
+- Relaciones.
+- Valores predeterminados.
+
+Utilizar índices únicos para evitar duplicados.
+
+Utilizar TTL solo en información cuya expiración sea intencionada.
+
+No eliminar registros históricos importantes.
+
+Separar datos globales y datos por servidor.
+
+---
+
+# 27. AUDITORÍA
+
+Crear un sistema completo.
+
+Registrar:
+- Login.
+- Logout.
+- Vinculación.
+- Desvinculación.
+- Instalación del bot.
+- Cambios Anti-Raid.
+- Activación de Lockdown.
+- Cuarentena.
+- Liberación.
+- Global Ban.
+- Retirada de sanción.
+- Revisión de apelaciones.
+- Cambios de permisos.
+
+Campos:
+- Actor.
+- Actor ID.
+- Acción.
+- Entidad.
+- Fecha.
+- Resultado.
+- IP solo cuando resulte necesario y con retención limitada.
+- Datos técnicos no sensibles.
+
+No almacenar:
+- Contraseñas.
+- Tokens.
+- Credenciales.
+- Secrets.
+
+Implementar auditoría protegida contra modificaciones no autorizadas.
+
+---
+
+# 28. NOTIFICACIONES
+
+Crear un sistema centralizado.
+
+Tipos:
+- Raid detected.
+- Critical incident.
+- Protection enabled.
+- Protection disabled.
+- Lockdown activated.
+- Lockdown finished.
+- User quarantined.
+- Global Ban match.
+- Global Ban expired.
+- Appeal submitted.
+- Bot disconnected.
+- Service unavailable.
+
+Permitir configurar:
+- Canal de Discord.
+- Eventos.
+- Severidad.
+- Frecuencia.
+- Preferencias del usuario.
+
+Evitar notificaciones duplicadas.
+
+Implementar agrupación para eventos masivos.
+
+Crear un Notification Center dentro del Dashboard.
+
+---
+
+# 29. CONFIGURACIÓN GENERAL
+
+Crear una página con:
+
+- Perfil Discord.
+- Avatar.
+- Username.
+- Idioma.
+- Tema.
+- Preferencias.
+- Sesiones activas.
+- Cierre de sesión.
+
+Sección Bot:
+- Estado.
+- Identidad.
+- Servidores.
+- Permisos.
+- Invitar.
+- Verificar conexión.
+
+Sección Security:
+- Configuración de sesión.
+- Roles.
+- Permisos.
+- Auditoría.
+
+---
+
+# 30. IDIOMAS
+
+Implementar internacionalización real.
+
+Idiomas iniciales:
+- Español.
+- Inglés.
+
+Español será el idioma predeterminado.
+
+Traducir:
+- Sidebar.
+- Dashboard.
+- Botones.
+- Estados.
+- Configuraciones.
+- Mensajes.
+- Notificaciones.
+- Formularios.
+- Errores.
+
+No traducir IDs, comandos ni nombres técnicos que deban mantenerse estables.
+
+Guardar la preferencia del usuario.
+
+---
+
+# 31. RESPONSIVE DESIGN
+
+El Dashboard debe funcionar perfectamente en:
+
+- Desktop.
+- Laptop.
+- Tablet.
+- Mobile.
+
+En mobile:
+- Sidebar convertida en menú desplegable.
+- Tablas adaptadas.
+- Tarjetas reorganizadas.
+- Gráficos redimensionados.
+- Modales adaptados.
+- Formularios cómodos.
+
+No permitir desbordamientos horizontales innecesarios.
+
+---
+
+# 32. SEGURIDAD
+
+Implementar medidas reales.
+
+- OAuth2 seguro.
+- State validation.
+- CSRF.
+- XSS protection.
+- NoSQL injection protection.
+- IDOR protection.
+- CORS estricto.
+- Helmet.
+- Rate limiting.
+- Session expiration.
+- Secure cookies.
+- Input validation.
+- Role-based access control.
+- Audit logging.
+- Secret management.
+- HTTPS.
+- Request size limits.
+- Protección contra replay.
+- Idempotencia.
+
+Todos los permisos deben verificarse en el backend.
+
+No confiar en valores del navegador.
+
+No exponer Discord Bot Token.
+
+No exponer MongoDB URI.
+
+No exponer Redis credentials.
+
+No exponer Discord Client Secret.
+
+No guardar secretos en Git.
+
+---
+
+# 33. VARIABLES DE ENTORNO
+
+Crear un .env.example completo.
+
+Incluir:
+
+NODE_ENV=
+PORT=
+
+DISCORD_BOT_TOKEN=
+DISCORD_CLIENT_ID=
+DISCORD_CLIENT_SECRET=
+DISCORD_REDIRECT_URI=
+DISCORD_BOT_INVITE_URL=
+
+MONGODB_URI=
+
+REDIS_URL=
+
+SESSION_SECRET=
+ENCRYPTION_KEY=
+
+DASHBOARD_URL=
+API_URL=
+FRONTEND_URL=
+
+OWNER_IDS=
+GLOBAL_ADMIN_IDS=
+
+LOG_LEVEL=
+
+Incorporar cualquier variable adicional que realmente sea necesaria.
+
+Validar variables al inicio.
+
+No colocar credenciales reales.
+
+No inventar valores.
+
+Crear instrucciones claras para configurar Discord Developer Portal.
+
+---
+
+# 34. DESPLIEGUE EN PTERODACTYL
+
+El proyecto debe estar preparado para Pterodactyl.
+
+Separar los servicios:
+
+1. Discord Bot.
+2. API Backend.
+3. Workers.
+
+El Dashboard puede compilarse y desplegarse independientemente.
+
+No intentar ejecutar múltiples servicios desatendidos en un único proceso de una manera difícil de mantener.
+
+Crear scripts:
+
+pnpm install
+
+pnpm build
+
+pnpm test
+
+pnpm start:bot
+
+pnpm start:api
+
+pnpm start:worker
+
+Los comandos definitivos deben coincidir con el monorepo.
+
+Documentar:
+- Dependencias.
+- Variables.
+- Puertos.
+- Redis.
+- MongoDB Atlas.
+- OAuth2.
+- Build.
+- Start.
+- Logs.
+- Reinicios.
+- Diagnóstico.
+
+Agregar health checks.
+
+---
+
+# 35. TESTING
+
+Implementar pruebas reales.
+
+## Unitarias
+
+- Risk Score.
+- Join Detection.
+- Sliding Windows.
+- Whitelist.
+- Global Ban Expiration.
+- Permissions.
+- Config Validation.
+- Rate Limit.
+
+## Integración
+
+- MongoDB.
+- Redis.
+- OAuth2.
+- Discord API.
+- API Backend.
+- WebSocket.
+- Bot.
+- Cache Invalidation.
+
+## E2E
+
+- Login.
+- Guild Selection.
+- Bot Installation.
+- Dashboard.
+- Anti-Raid Configuration.
+- Incident Management.
+- Global Ban.
+- Appeals.
+
+## Performance
+
+Simular:
+- Grandes cantidades de joins.
+- Eventos concurrentes.
+- Varias instancias.
+- Cambios de configuración.
+- Cache misses.
+- Redis unavailable.
+- MongoDB unavailable.
+
+Medir:
+- Latencia.
+- CPU.
+- RAM.
+- Event Loop Lag.
+- Consultas.
+- Operaciones Redis.
+- Eventos procesados.
+
+No inventar resultados.
+
+---
+
+# 36. DOCUMENTACIÓN
+
+Crear README.md profesional.
+
+Incluir:
+- Descripción.
+- Arquitectura.
+- Tecnologías.
+- Estructura.
+- Instalación.
+- Discord Developer Portal.
+- OAuth2.
+- Bot Setup.
+- MongoDB.
+- Redis.
+- Dashboard.
+- API.
+- Pterodactyl.
+- Comandos.
+- Permisos.
+- Seguridad.
+- Troubleshooting.
+
+Crear además:
+- ARCHITECTURE.md
+- SECURITY.md
+- API.md
+- DEPLOYMENT.md
+- COMMANDS.md
+- IMPLEMENTATION_STATUS.md
+
+---
+
+# 37. METODOLOGÍA DE CONSTRUCCIÓN
+
+No intentes resolver todo creando una única página de frontend.
+
+Primero inspecciona el proyecto existente, si lo hay.
+
+No eliminar funcionalidades o archivos existentes sin entender su dependencia.
+
+Establece una arquitectura definitiva.
+
+Construye por módulos completos.
+
+## FASE 1 — FUNDACIÓN
+
+- Estructura del monorepo.
+- TypeScript.
+- Dependencias.
+- Configuración.
+- Tipos compartidos.
+- Validaciones.
+- MongoDB.
+- Redis.
+
+## FASE 2 — AUTENTICACIÓN
+
+- Discord OAuth2.
+- Sesiones.
+- Perfil.
+- Servidores.
+- Permisos.
+- Vinculación.
+
+## FASE 3 — INSTALACIÓN DEL BOT
+
+- Invitación.
+- Scopes.
+- Verificación.
+- Estado.
+- Sincronización.
+
+## FASE 4 — DASHBOARD
+
+- Identidad.
+- Sidebar.
+- Layout.
+- Temas.
+- SVG.
+- Overview.
+- Navegación.
+
+## FASE 5 — ANTI-RAID
+
+- Detectores.
+- Risk Engine.
+- Join Protection.
+- Anti-Nuke.
+- Quarantine.
+- Lockdown.
+- Whitelist.
+
+## FASE 6 — GLOBAL BAN
+
+- Database.
+- Sanciones.
+- Moderadores.
+- Apelaciones.
+- Expiraciones.
+- Servidores participantes.
+
+## FASE 7 — BOT Y COMPONENTS V2
+
+- Slash Commands.
+- Interacciones.
+- Paneles.
+- Eventos.
+- Respuestas.
+- Permisos.
+
+## FASE 8 — RENDIMIENTO
+
+- Memory Cache.
+- Redis.
+- Pub/Sub.
+- Contadores.
+- Colas.
+- Invalidación.
+
+## FASE 9 — TESTING
+
+- Unit.
+- Integration.
+- E2E.
+- Load.
+- Security.
+
+## FASE 10 — PRODUCCIÓN
+
+- Variables.
+- Build.
+- Despliegue.
+- Health.
+- Logs.
+- Documentación.
+
+Al terminar cada fase:
+1. Comprobar archivos.
+2. Comprobar imports.
+3. Comprobar dependencias.
+4. Comprobar tipos.
+5. Ejecutar pruebas.
+6. Corregir errores.
+7. Actualizar IMPLEMENTATION_STATUS.md.
+
+Nunca afirmar que una funcionalidad está terminada cuando solo existe visualmente.
+
+---
+
+# 38. REGLAS INQUEBRANTABLES
+
+1. No utilizar emojis.
+2. Utilizar únicamente iconografía SVG en el Dashboard.
+3. No crear botones decorativos.
+4. No utilizar datos ficticios en producción.
+5. No simular conexiones.
+6. No fingir estados online.
+7. No dejar funciones vacías.
+8. No dejar páginas sin implementar.
+9. No repetir listeners.
+10. No duplicar comandos.
+11. No mezclar permisos de servidores.
+12. No confiar en el frontend.
+13. No realizar Global Bans automáticamente a partir de sospechas débiles.
+14. No permitir acceso a servidores sin autorización.
+15. No almacenar secretos en el navegador.
+16. No consultar MongoDB innecesariamente.
+17. No bloquear el event loop.
+18. No reiniciar el bot para aplicar configuraciones.
+19. No ejecutar sanciones imposibles por jerarquía de Discord.
+20. No utilizar métodos obsoletos.
+21. No inventar funciones de Discord.js.
+22. No omitir errores.
+23. No sacrificar seguridad por velocidad.
+24. No sacrificar usabilidad por efectos visuales.
+25. No crear sistemas de otras categorías.
+
+---
+
+# 39. CONTROL DE CALIDAD FINAL
+
+Antes de terminar, verificar:
+
+DASHBOARD:
+- Diseño.
+- Navegación.
+- Temas.
+- SVG.
+- Responsive.
+- Formularios.
+- Estadísticas.
+- Gráficos.
+
+DISCORD:
+- OAuth2.
+- Sesión.
+- Usuario.
+- Servidores.
+- Permisos.
+- Instalación.
+- Vinculación.
+
+BOT:
+- Conexión.
+- Slash Commands.
+- Components V2.
+- Anti-Raid.
+- Anti-Nuke.
+- Cuarentena.
+- Lockdown.
+- Whitelist.
+
+GLOBAL BAN:
+- Crear.
+- Consultar.
+- Retirar.
+- Apelar.
+- Expirar.
+- Auditar.
+- Sincronizar.
+
+INFRAESTRUCTURA:
+- MongoDB.
+- Redis.
+- API.
+- Workers.
+- WebSocket.
+- Caché.
+- Health Checks.
+
+SEGURIDAD:
+- Autorización.
+- Validación.
+- Sesiones.
+- Protección.
+- Auditoría.
+- Secretos.
+
+No entregar el proyecto como finalizado si existen errores críticos o integraciones esenciales sin implementar.
+
+---
+
+# 40. RESULTADO QUE QUIERO CONSEGUIR
+
+AEGIS SECURITY debe sentirse como un producto SaaS premium de ciberseguridad.
+
+Quiero que un usuario pueda:
+
+1. Entrar a la web.
+2. Iniciar sesión con Discord.
+3. Vincular su identidad.
+4. Consultar sus servidores.
+5. Instalar el bot en un servidor.
+6. Verificar la conexión.
+7. Seleccionar el servidor.
+8. Configurar Anti-Raid.
+9. Activar protecciones.
+10. Consultar amenazas en tiempo real.
+11. Administrar cuarentenas.
+12. Consultar incidentes.
+13. Acceder al sistema Global Ban.
+14. Crear o retirar sanciones según permisos.
+15. Gestionar apelaciones.
+16. Administrar servidores participantes.
+17. Consultar auditorías y estadísticas.
+
+Todo debe funcionar desde un mismo ecosistema.
+
+La apariencia debe ser profesional, atractiva, limpia y tecnológica.
+
+El sistema debe ser rápido, estable, mantenible y seguro.
+
+# IDENTIDAD FINAL
+
+AEGIS SECURITY
+
+Discord Security Platform
+
+Advanced Anti-Raid Protection
+
+Global Ban Network
+
+**Protect your community. Secure your network.**
+
+CONSTRUYE EL PROYECTO COMPLETO.
+
+No quiero una demostración visual.
+
+No quiero un prototipo.
+
+No quiero un frontend desconectado.
+
+Quiero una plataforma real, completamente integrada y preparada para desplegarse en producción.
