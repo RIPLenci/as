@@ -1,18 +1,15 @@
 import crypto from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { appealPatchSchema } from '@/lib/aegis/validators';
-import { requireAuthenticatedUser, requireGlobalPermission } from '@/lib/server/auth-guard';
+import { requireSuperOwner } from '@/lib/server/auth-guard';
 import { aegisStore } from '@/lib/server/store';
 
 export async function PATCH(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
-  const auth = await requireAuthenticatedUser();
+  const auth = await requireSuperOwner();
   if (!auth.ok) return auth.response;
-
-  const perm = requireGlobalPermission(auth.ctx, 'appeals:manage');
-  if (!perm.ok) return perm.response;
 
   const { id } = await context.params;
   const body = await req.json().catch(() => null);

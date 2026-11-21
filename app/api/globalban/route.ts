@@ -1,15 +1,12 @@
 import crypto from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { globalBanCreateSchema } from '@/lib/aegis/validators';
-import { requireAuthenticatedUser, requireGlobalPermission } from '@/lib/server/auth-guard';
+import { requireSuperOwner } from '@/lib/server/auth-guard';
 import { aegisStore } from '@/lib/server/store';
 
 export async function GET(req: NextRequest) {
-  const auth = await requireAuthenticatedUser();
+  const auth = await requireSuperOwner();
   if (!auth.ok) return auth.response;
-
-  const perm = requireGlobalPermission(auth.ctx, 'globalban:read');
-  if (!perm.ok) return perm.response;
 
   const status = req.nextUrl.searchParams.get('status') || 'ALL';
   const type = req.nextUrl.searchParams.get('type') || 'ALL';
@@ -33,11 +30,8 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const auth = await requireAuthenticatedUser();
+  const auth = await requireSuperOwner();
   if (!auth.ok) return auth.response;
-
-  const perm = requireGlobalPermission(auth.ctx, 'globalban:create');
-  if (!perm.ok) return perm.response;
 
   const body = await req.json().catch(() => null);
   const parsed = globalBanCreateSchema.safeParse(body);
@@ -50,22 +44,6 @@ export async function POST(req: NextRequest) {
 
   const d = parsed.data;
   const { state, user } = auth.ctx;
-
-  // Reinforced authorization check for PERMANENT Global Bans
-  if (
-    d.sanctionType === 'PERMANENT' &&
-    state.systemSettings.requireDualApprovalForPermanentBan &&
-    perm.role !== 'OWNER' &&
-    perm.role !== 'GLOBAL_ADMINISTRATOR'
-  ) {
-    return NextResponse.json(
-      {
-        error: 'REINFORCED_AUTHORIZATION_REQUIRED',
-        message: 'Permanent Global Bans require OWNER or GLOBAL_ADMINISTRATOR authorization.',
-      },
-      { status: 403 }
-    );
-  }
 
   const existingActive = state.globalBans.find(
     (b) =>

@@ -34,8 +34,8 @@ export async function POST(
     guildId,
     type: 'PROTECTION_DISABLED',
     severity: 'MODERATE',
-    title: `Anti-Raid Protection Disabled — ${guard.guild.name}`,
-    message: `Automated join protection paused by ${user.username}.`,
+    title: `Protección Anti-Raid Desactivada — ${guard.guild.name}`,
+    message: `Protección automática de ingresos pausada por ${user.username}.`,
     groupedCount: 1,
   });
 

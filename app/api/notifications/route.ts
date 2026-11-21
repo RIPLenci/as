@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
+import { isSuperOwner } from '@/lib/aegis/rbac';
 import { isUserAuthorizedForGuildCollection, requireAuthenticatedUser } from '@/lib/server/auth-guard';
 import { aegisStore } from '@/lib/server/store';
 
@@ -17,8 +18,10 @@ export async function GET() {
   if (!auth.ok) return auth.response;
 
   const { user, state } = auth.ctx;
-  const notifications = state.notifications.filter(
-    (n) => !n.guildId || isUserAuthorizedForGuildCollection(state, user, n.guildId)
+  const notifications = state.notifications.filter((n) =>
+    n.guildId
+      ? isUserAuthorizedForGuildCollection(state, user, n.guildId)
+      : isSuperOwner(user.discordId)
   );
 
   return NextResponse.json({
@@ -42,7 +45,9 @@ export async function PATCH(req: NextRequest) {
 
   const { user, state } = auth.ctx;
   const isAuthorized = (guildId: string | null) =>
-    !guildId || isUserAuthorizedForGuildCollection(state, user, guildId);
+    guildId
+      ? isUserAuthorizedForGuildCollection(state, user, guildId)
+      : isSuperOwner(user.discordId);
 
   if (parsed.data.markAllRead) {
     for (const n of state.notifications) {

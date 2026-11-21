@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import {
   Ban,
@@ -183,18 +183,23 @@ export function AdminPanelView({
   const [gbFiles, setGbFiles] = useState<Array<{ file: File; previewUrl: string }>>([]);
   const [gbRemoveId, setGbRemoveId] = useState('');
 
+  const gbFilesRef = useRef<Array<{ file: File; previewUrl: string }>>([]);
+  useEffect(() => {
+    gbFilesRef.current = gbFiles;
+  }, [gbFiles]);
+
   // Keep a 1-second live clock while Owner is viewing Admin Panel so remaining time ticks down to exact seconds
   useEffect(() => {
     const id = window.setInterval(() => setNowTick(Date.now()), 1000);
     return () => window.clearInterval(id);
   }, []);
 
-  // Cleanup preview object URLs on unmount
+  // Cleanup preview object URLs strictly on unmount so multi-file previews are preserved
   useEffect(() => {
     return () => {
-      gbFiles.forEach((f) => URL.revokeObjectURL(f.previewUrl));
+      gbFilesRef.current.forEach((f) => URL.revokeObjectURL(f.previewUrl));
     };
-  }, [gbFiles]);
+  }, []);
 
   const loadAdminData = useCallback(async (lookupId?: string) => {
     setLoading(true);
@@ -225,10 +230,17 @@ export function AdminPanelView({
           setGlobalBans(gJson.bans || []);
         }
       }
+    } catch {
+      setFeedback({
+        ok: false,
+        text: isEs
+          ? 'Error de red al sincronizar el panel administrativo.'
+          : 'Network error syncing admin panel.',
+      });
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [isEs]);
 
   useEffect(() => {
     if (!isSuperOwner(user)) return;
@@ -250,13 +262,23 @@ export function AdminPanelView({
           }
         }
       })
+      .catch(() => {
+        if (!cancelled) {
+          setFeedback({
+            ok: false,
+            text: isEs
+              ? 'No se pudieron cargar los datos administrativos.'
+              : 'Failed to load admin data.',
+          });
+        }
+      })
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [user, syncNonce]);
+  }, [user, syncNonce, isEs]);
 
   if (!isSuperOwner(user)) {
     return (
@@ -298,6 +320,11 @@ export function AdminPanelView({
       onSuccess?.(json);
       await loadAdminData(lookupSearchedId || undefined);
       onSyncCompleted();
+    } catch {
+      setFeedback({
+        ok: false,
+        text: isEs ? 'Error de red al guardar en gestión Premium.' : 'Network error updating Premium.',
+      });
     } finally {
       setBusy(false);
     }
@@ -329,6 +356,11 @@ export function AdminPanelView({
             : `No Premium record found for ${id}.`,
         });
       }
+    } catch {
+      setFeedback({
+        ok: false,
+        text: isEs ? 'Error de red al consultar la suscripción.' : 'Network error during lookup.',
+      });
     } finally {
       setBusy(false);
     }
@@ -404,6 +436,11 @@ export function AdminPanelView({
       setGbFiles([]);
       await loadAdminData();
       onSyncCompleted();
+    } catch {
+      setFeedback({
+        ok: false,
+        text: isEs ? 'Error de red al aplicar Globalban.' : 'Network error applying Globalban.',
+      });
     } finally {
       setBusy(false);
     }
@@ -430,6 +467,11 @@ export function AdminPanelView({
       if (gbRemoveId.trim() === clean) setGbRemoveId('');
       await loadAdminData();
       onSyncCompleted();
+    } catch {
+      setFeedback({
+        ok: false,
+        text: isEs ? 'Error de red al eliminar Globalban.' : 'Network error deleting Globalban.',
+      });
     } finally {
       setBusy(false);
     }

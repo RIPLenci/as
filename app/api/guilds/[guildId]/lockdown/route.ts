@@ -51,7 +51,7 @@ export async function POST(
 
   if (d.action === 'ACTIVATE') {
     const restrictions = d.restrictions ?? existing.restrictions;
-    const reason = d.reason ?? 'Emergency Lockdown triggered from AEGIS Dashboard';
+    const reason = d.reason ?? 'Bloqueo de Emergencia activado desde el Panel AEGIS';
 
     const syncResult = await enforceDiscordLockdown({
       guildId,
@@ -77,8 +77,8 @@ export async function POST(
       guildId,
       type: 'LOCKDOWN_ACTIVATED',
       severity: 'CRITICAL',
-      title: `Emergency Lockdown Activated — ${guard.guild.name}`,
-      message: `${existing.reason}. Permission snapshot saved for safe restoration.`,
+      title: `Bloqueo de Emergencia Activado — ${guard.guild.name}`,
+      message: `${existing.reason}. Instantánea de permisos guardada para restauración segura.`,
       groupedCount: 1,
     });
 
@@ -131,8 +131,8 @@ export async function POST(
       guildId,
       type: 'LOCKDOWN_FINISHED',
       severity: 'LOW',
-      title: `Emergency Lockdown Restored — ${guard.guild.name}`,
-      message: `Original channel permissions restored safely (${preservedManual} manual admin overrides preserved).`,
+      title: `Bloqueo de Emergencia Restaurado — ${guard.guild.name}`,
+      message: `Permisos originales de canales restaurados de forma segura (${preservedManual} ajustes manuales preservados).`,
       groupedCount: 1,
     });
 

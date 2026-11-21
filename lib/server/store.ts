@@ -1398,9 +1398,33 @@ class AegisStore extends EventEmitter {
     const tier = normalizePlanTier(sub.tier) as 'ORO' | 'DIAMANTE';
     const maxServers = buildPlanQuotas(tier).maxPremiumServers;
     if (sub.activatedGuildIds.includes(params.guildId)) {
+      const guildName = state.guilds[params.guildId]?.name ?? `Servidor ${params.guildId}`;
+      this.ensureGuildStructures(state, params.guildId, guildName);
+      const existingPlan = Object.hasOwn(state.guildPlans, params.guildId)
+        ? state.guildPlans[params.guildId]
+        : undefined;
+      const ensuredPlan: GuildPlanRecord = existingPlan
+        ? {
+            ...existingPlan,
+            tier,
+            ownerUserId: existingPlan.ownerUserId ?? params.discordId,
+            expiresAt: sub.expiresAt,
+            quotas: buildPlanQuotas(tier),
+          }
+        : {
+            guildId: params.guildId,
+            tier,
+            ownerUserId: params.discordId,
+            activatedAt: new Date().toISOString(),
+            expiresAt: sub.expiresAt,
+            activatedBy: params.username,
+            activationSource: 'USER_SLOT',
+            quotas: buildPlanQuotas(tier),
+          };
+      state.guildPlans[params.guildId] = ensuredPlan;
       return {
         ok: true,
-        plan: state.guildPlans[params.guildId],
+        plan: ensuredPlan,
         subscription: sub,
       };
     }
@@ -1792,9 +1816,10 @@ class AegisStore extends EventEmitter {
           ? `${String(dt.getHours()).padStart(2, '0')}:00`
           : `${dt.getDate()}/${dt.getMonth() + 1}`;
 
+      const isLastBucket = idx === bucketCount - 1;
       const inBucket = currentIncidents.filter((inc) => {
         const ts = new Date(inc.createdAt).getTime();
-        return ts >= bucketStart && ts < bucketEnd;
+        return ts >= bucketStart && (isLastBucket ? ts <= bucketEnd : ts < bucketEnd);
       });
 
       return {

@@ -2,13 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { participatingServerPatchSchema } from '@/lib/aegis/validators';
 import {
   isUserAuthorizedForGuildCollection,
-  requireAuthenticatedUser,
   requireGuildAuthorization,
+  requireSuperOwner,
 } from '@/lib/server/auth-guard';
 import { aegisStore } from '@/lib/server/store';
 
 export async function GET() {
-  const auth = await requireAuthenticatedUser();
+  const auth = await requireSuperOwner();
   if (!auth.ok) return auth.response;
 
   const { user, state } = auth.ctx;
@@ -34,7 +34,7 @@ export async function GET() {
 }
 
 export async function PATCH(req: NextRequest) {
-  const auth = await requireAuthenticatedUser();
+  const auth = await requireSuperOwner();
   if (!auth.ok) return auth.response;
 
   const body = await req.json().catch(() => null);

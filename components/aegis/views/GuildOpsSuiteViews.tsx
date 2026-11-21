@@ -83,6 +83,8 @@ export function GuildOpsSuiteViews({
 }: GuildOpsSuiteViewsProps) {
   const c = getSuiteCopy(language);
   const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [reloadNonce, setReloadNonce] = useState(0);
   const [loading, setLoading] = useState(true);
   const loadedKeyRef = useRef<string>('');
 
@@ -169,13 +171,20 @@ export function GuildOpsSuiteViews({
     const load = async () => {
       if (isInitialLoad) {
         setFeedback(null);
+        setLoadError(null);
         setLoading(true);
       }
+      const isEs = language === 'es';
       try {
         if (section === 'two-factor') {
           const res = await aegisFetch('/api/auth/2fa');
           const json = await res.json().catch(() => null);
-          if (!cancelled && res.ok && json) {
+          if (!cancelled) {
+            if (!res.ok || !json) {
+              setLoadError(json?.message || (isEs ? 'No se pudo cargar la configuración 2FA.' : 'Failed to load 2FA settings.'));
+              return;
+            }
+            setLoadError(null);
             setTwoFaState({
               enabled: Boolean(json.enabled),
               recoveryCodesRemaining: json.recoveryCodesRemaining ?? 0,
@@ -188,7 +197,12 @@ export function GuildOpsSuiteViews({
         if (section === 'premium') {
           const uRes = await aegisFetch('/api/premium');
           const uJson = await uRes.json().catch(() => null);
-          if (!cancelled && uRes.ok && uJson) {
+          if (!cancelled) {
+            if (!uRes.ok || !uJson) {
+              setLoadError(uJson?.message || (isEs ? 'No se pudo cargar tu suscripción Premium.' : 'Failed to load Premium status.'));
+              return;
+            }
+            setLoadError(null);
             setPremiumOverview({
               subscription: uJson.subscription,
             });
@@ -205,18 +219,28 @@ export function GuildOpsSuiteViews({
           ]);
           const vJson = await vRes.json().catch(() => null);
           const cJson = await cRes.json().catch(() => null);
-          if (!cancelled && vRes.ok && vJson) {
+          if (!cancelled) {
+            if (!vRes.ok || !vJson?.verification) {
+              setLoadError(vJson?.message || (isEs ? 'No se pudo cargar el sistema de verificación.' : 'Failed to load verification config.'));
+              return;
+            }
+            setLoadError(null);
             setVerification(vJson.verification);
             setPlan(vJson.plan);
-          }
-          if (!cancelled && cRes.ok && cJson) {
-            setChannels(cJson.channels || []);
-            setRoles(cJson.roles || []);
+            if (cRes.ok && cJson) {
+              setChannels(cJson.channels || []);
+              setRoles(cJson.roles || []);
+            }
           }
         } else if (section === 'log-channel') {
           const res = await aegisFetch(`/api/guilds/${activeGuildId}/channels`);
           const json = await res.json().catch(() => null);
-          if (!cancelled && res.ok && json) {
+          if (!cancelled) {
+            if (!res.ok || !json?.logConfig) {
+              setLoadError(json?.message || (isEs ? 'No se pudo cargar la configuración de canales.' : 'Failed to load log channel config.'));
+              return;
+            }
+            setLoadError(null);
             setChannels(json.channels || []);
             setLogConfig(json.logConfig || null);
             if (isInitialLoad) {
@@ -226,7 +250,12 @@ export function GuildOpsSuiteViews({
         } else if (section === 'backups') {
           const res = await aegisFetch(`/api/guilds/${activeGuildId}/backups`);
           const json = await res.json().catch(() => null);
-          if (!cancelled && res.ok && json) {
+          if (!cancelled) {
+            if (!res.ok || !json) {
+              setLoadError(json?.message || (isEs ? 'No se pudieron cargar las copias de seguridad.' : 'Failed to load backups.'));
+              return;
+            }
+            setLoadError(null);
             setBackups(json.backups || []);
             setBackupSettings(json.settings || null);
             setPlan(json.plan || null);
@@ -235,10 +264,23 @@ export function GuildOpsSuiteViews({
         } else if (section === 'secondary-owner') {
           const res = await aegisFetch(`/api/guilds/${activeGuildId}/secondary-owner`);
           const json = await res.json().catch(() => null);
-          if (!cancelled && res.ok && json) {
+          if (!cancelled) {
+            if (!res.ok || !json) {
+              setLoadError(json?.message || (isEs ? 'No se pudo cargar el Segundo Owner.' : 'Failed to load Secondary Owner.'));
+              return;
+            }
+            setLoadError(null);
             setSecondaryOwner(json.secondaryOwner || null);
             setCanAssignSecondOwner(Boolean(json.canAssign));
           }
+        }
+      } catch {
+        if (!cancelled) {
+          setLoadError(
+            isEs
+              ? 'Error de red al cargar los datos del servidor.'
+              : 'Network error loading server settings.'
+          );
         }
       } finally {
         loadedKeyRef.current = viewKey;
@@ -250,7 +292,7 @@ export function GuildOpsSuiteViews({
     return () => {
       cancelled = true;
     };
-  }, [section, activeGuildId, syncNonce]);
+  }, [section, activeGuildId, syncNonce, reloadNonce, language]);
 
   const requiresGuild = section !== 'two-factor' && section !== 'premium';
 
@@ -285,6 +327,28 @@ export function GuildOpsSuiteViews({
     );
   }
 
+  if (loadError) {
+    return (
+      <div
+        role="alert"
+        className="rounded-3xl border border-red-500/35 bg-white/85 dark:bg-[#0B0F19]/90 p-8 text-center space-y-3"
+      >
+        <ShieldAlert className="w-9 h-9 text-red-500 mx-auto" />
+        <p className="text-sm font-medium text-red-600 dark:text-red-300">{loadError}</p>
+        <button
+          type="button"
+          onClick={() => {
+            loadedKeyRef.current = '';
+            setReloadNonce((n) => n + 1);
+          }}
+          className="px-4 py-2 rounded-xl bg-[#5865F2] hover:bg-[#4752C4] text-white text-xs font-semibold cursor-pointer"
+        >
+          {language === 'es' ? 'Reintentar' : 'Retry'}
+        </button>
+      </div>
+    );
+  }
+
   const renderFeedback = () =>
     feedback ? (
       <motion.div
@@ -309,26 +373,36 @@ export function GuildOpsSuiteViews({
     const isPremium = isPaidTier(normalizePlanTier(plan?.tier));
     const saveVerification = async (patch: Partial<GuildVerificationRecord>) => {
       setFeedback(null);
-      const res = await aegisFetch(`/api/guilds/${activeGuildId}/verification`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(patch),
-      });
-      const json = await res.json().catch(() => null);
-      if (!res.ok) {
+      try {
+        const res = await aegisFetch(`/api/guilds/${activeGuildId}/verification`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patch),
+        });
+        const json = await res.json().catch(() => null);
+        if (!res.ok) {
+          setFeedback({
+            ok: false,
+            text:
+              json?.message ||
+              (language === 'es'
+                ? 'Error al actualizar la verificación.'
+                : 'Error updating verification'),
+          });
+          return;
+        }
+        setVerification(json.verification);
+        setFeedback({ ok: true, text: c.common.saved });
+        onSyncCompleted();
+      } catch {
         setFeedback({
           ok: false,
           text:
-            json?.message ||
-            (language === 'es'
-              ? 'Error al actualizar la verificación.'
-              : 'Error updating verification'),
+            language === 'es'
+              ? 'Error de red al guardar la verificación.'
+              : 'Network error saving verification.',
         });
-        return;
       }
-      setVerification(json.verification);
-      setFeedback({ ok: true, text: c.common.saved });
-      onSyncCompleted();
     };
 
     return (
@@ -570,26 +644,36 @@ export function GuildOpsSuiteViews({
     const lc = c.logChannel;
     const saveLogs = async (patch: Partial<GuildLogConfigRecord>) => {
       setFeedback(null);
-      const res = await aegisFetch(`/api/guilds/${activeGuildId}/channels`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(patch),
-      });
-      const json = await res.json().catch(() => null);
-      if (!res.ok) {
+      try {
+        const res = await aegisFetch(`/api/guilds/${activeGuildId}/channels`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patch),
+        });
+        const json = await res.json().catch(() => null);
+        if (!res.ok) {
+          setFeedback({
+            ok: false,
+            text:
+              json?.message ||
+              (language === 'es'
+                ? 'Error al actualizar el canal de registros.'
+                : 'Error updating log channel'),
+          });
+          return;
+        }
+        setLogConfig(json.logConfig);
+        setFeedback({ ok: true, text: c.common.saved });
+        onSyncCompleted();
+      } catch {
         setFeedback({
           ok: false,
           text:
-            json?.message ||
-            (language === 'es'
-              ? 'Error al actualizar el canal de registros.'
-              : 'Error updating log channel'),
+            language === 'es'
+              ? 'Error de red al guardar el canal de registros.'
+              : 'Network error saving log channel.',
         });
-        return;
       }
-      setLogConfig(json.logConfig);
-      setFeedback({ ok: true, text: c.common.saved });
-      onSyncCompleted();
     };
 
     const sendTest = async () => {
@@ -610,6 +694,14 @@ export function GuildOpsSuiteViews({
                 : 'Could not dispatch test embed.'),
           });
         }
+      } catch {
+        setFeedback({
+          ok: false,
+          text:
+            language === 'es'
+              ? 'Error de red al enviar el mensaje de prueba.'
+              : 'Network error sending test embed.',
+        });
       } finally {
         setTestingLog(false);
       }
@@ -783,49 +875,95 @@ export function GuildOpsSuiteViews({
         setFeedback({ ok: true, text: c.common.saved });
         await reloadBackups();
         onSyncCompleted();
+      } catch {
+        setFeedback({
+          ok: false,
+          text: isEs ? 'Error de red al crear la copia de seguridad.' : 'Network error creating backup.',
+        });
       } finally {
         setCreatingBackup(false);
       }
     };
 
     const handleRestore = async (backupId: string) => {
-      const res = await aegisFetch(`/api/guilds/${activeGuildId}/backups`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'RESTORE', backupId }),
-      });
-      if (res.ok) {
+      setFeedback(null);
+      try {
+        const res = await aegisFetch(`/api/guilds/${activeGuildId}/backups`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'RESTORE', backupId }),
+        });
+        const json = await res.json().catch(() => null);
+        if (!res.ok) {
+          setFeedback({
+            ok: false,
+            text: json?.message || (isEs ? 'No se pudo restaurar la copia.' : 'Could not restore backup.'),
+          });
+          return;
+        }
         setFeedback({ ok: true, text: c.common.saved });
         onSyncCompleted();
+      } catch {
+        setFeedback({
+          ok: false,
+          text: isEs ? 'Error de red al restaurar la copia.' : 'Network error restoring backup.',
+        });
       }
     };
 
     const handleDelete = async (backupId: string) => {
-      const res = await aegisFetch(
-        `/api/guilds/${activeGuildId}/backups?id=${encodeURIComponent(backupId)}`,
-        { method: 'DELETE' }
-      );
-      if (res.ok) {
+      setFeedback(null);
+      try {
+        const res = await aegisFetch(
+          `/api/guilds/${activeGuildId}/backups?id=${encodeURIComponent(backupId)}`,
+          { method: 'DELETE' }
+        );
+        const json = await res.json().catch(() => null);
+        if (!res.ok) {
+          setFeedback({
+            ok: false,
+            text: json?.message || (isEs ? 'No se pudo eliminar la copia.' : 'Could not delete backup.'),
+          });
+          return;
+        }
         setFeedback({
           ok: true,
           text: isEs ? 'Copia eliminada. Cuota liberada.' : 'Backup deleted.',
         });
         await reloadBackups();
         onSyncCompleted();
+      } catch {
+        setFeedback({
+          ok: false,
+          text: isEs ? 'Error de red al eliminar la copia.' : 'Network error deleting backup.',
+        });
       }
     };
 
     const handleSchedule = async (schedule: 'OFF' | 'AUTO') => {
-      const res = await aegisFetch(`/api/guilds/${activeGuildId}/backups`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'SET_SCHEDULE', schedule }),
-      });
-      const json = await res.json().catch(() => null);
-      if (res.ok && json) {
+      setFeedback(null);
+      try {
+        const res = await aegisFetch(`/api/guilds/${activeGuildId}/backups`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'SET_SCHEDULE', schedule }),
+        });
+        const json = await res.json().catch(() => null);
+        if (!res.ok || !json) {
+          setFeedback({
+            ok: false,
+            text: json?.message || (isEs ? 'Error al guardar programación automática.' : 'Schedule update failed.'),
+          });
+          return;
+        }
         setBackupSettings(json.settings);
         setBackupScheduleInfo(json.scheduleInfo || null);
         setFeedback({ ok: true, text: c.common.saved });
+      } catch {
+        setFeedback({
+          ok: false,
+          text: isEs ? 'Error de red al actualizar la programación.' : 'Network error updating schedule.',
+        });
       }
     };
 
@@ -1083,69 +1221,95 @@ export function GuildOpsSuiteViews({
 
     const handleInitSetup = async () => {
       setFeedback(null);
-      const res = await aegisFetch('/api/auth/2fa', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'INIT_SETUP' }),
-      });
-      const json = await res.json().catch(() => null);
-      if (res.ok && json) {
+      try {
+        const res = await aegisFetch('/api/auth/2fa', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'INIT_SETUP' }),
+        });
+        const json = await res.json().catch(() => null);
+        if (!res.ok || !json) {
+          setFeedback({
+            ok: false,
+            text: json?.message || (language === 'es' ? 'No se pudo iniciar la configuración 2FA.' : 'Could not initiate 2FA setup.'),
+          });
+          return;
+        }
         setPendingSetup({ secretBase32: json.secretBase32, otpauthUri: json.otpauthUri });
+      } catch {
+        setFeedback({
+          ok: false,
+          text: language === 'es' ? 'Error de red al iniciar 2FA.' : 'Network error initiating 2FA.',
+        });
       }
     };
 
     const handleConfirmEnable = async (e: React.FormEvent) => {
       e.preventDefault();
       setFeedback(null);
-      const res = await aegisFetch('/api/auth/2fa', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'CONFIRM_ENABLE', token: totpCode.trim() }),
-      });
-      const json = await res.json().catch(() => null);
-      if (!res.ok) {
+      try {
+        const res = await aegisFetch('/api/auth/2fa', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'CONFIRM_ENABLE', token: totpCode.trim() }),
+        });
+        const json = await res.json().catch(() => null);
+        if (!res.ok) {
+          setFeedback({
+            ok: false,
+            text:
+              json?.message ||
+              (language === 'es' ? 'Código de verificación inválido.' : 'Invalid verification code'),
+          });
+          return;
+        }
+        setTwoFaState({
+          enabled: true,
+          recoveryCodesRemaining: json.recoveryCodesRemaining ?? 8,
+          enabledAt: json.enabledAt ?? new Date().toISOString(),
+        });
+        setRecoveryCodes(json.recoveryCodes || null);
+        setPendingSetup(null);
+        setTotpCode('');
+        setFeedback({ ok: true, text: c.common.saved });
+      } catch {
         setFeedback({
           ok: false,
-          text:
-            json?.message ||
-            (language === 'es' ? 'Código de verificación inválido.' : 'Invalid verification code'),
+          text: language === 'es' ? 'Error de red al confirmar 2FA.' : 'Network error enabling 2FA.',
         });
-        return;
       }
-      setTwoFaState({
-        enabled: true,
-        recoveryCodesRemaining: json.recoveryCodesRemaining ?? 8,
-        enabledAt: json.enabledAt ?? new Date().toISOString(),
-      });
-      setRecoveryCodes(json.recoveryCodes || null);
-      setPendingSetup(null);
-      setTotpCode('');
-      setFeedback({ ok: true, text: c.common.saved });
     };
 
     const handleVerifyOrDisable = async (action: 'VERIFY_TOKEN' | 'DISABLE') => {
       setFeedback(null);
-      const res = await aegisFetch('/api/auth/2fa', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, token: verifyTokenInput.trim() }),
-      });
-      const json = await res.json().catch(() => null);
-      if (!res.ok) {
+      try {
+        const res = await aegisFetch('/api/auth/2fa', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action, token: verifyTokenInput.trim() }),
+        });
+        const json = await res.json().catch(() => null);
+        if (!res.ok) {
+          setFeedback({
+            ok: false,
+            text:
+              json?.message ||
+              (language === 'es' ? 'Error al validar el código.' : 'Verification failed'),
+          });
+          return;
+        }
+        if (action === 'DISABLE') {
+          setTwoFaState({ enabled: false, recoveryCodesRemaining: 0, enabledAt: null });
+          setRecoveryCodes(null);
+        }
+        setVerifyTokenInput('');
+        setFeedback({ ok: true, text: c.common.saved });
+      } catch {
         setFeedback({
           ok: false,
-          text:
-            json?.message ||
-            (language === 'es' ? 'Error al validar el código.' : 'Verification failed'),
+          text: language === 'es' ? 'Error de red al validar el código.' : 'Network error verifying 2FA token.',
         });
-        return;
       }
-      if (action === 'DISABLE') {
-        setTwoFaState({ enabled: false, recoveryCodesRemaining: 0, enabledAt: null });
-        setRecoveryCodes(null);
-      }
-      setVerifyTokenInput('');
-      setFeedback({ ok: true, text: c.common.saved });
     };
 
     return (
@@ -1307,43 +1471,70 @@ export function GuildOpsSuiteViews({
     const handleAssign = async (e: React.FormEvent) => {
       e.preventDefault();
       setFeedback(null);
-      const res = await aegisFetch(`/api/guilds/${activeGuildId}/secondary-owner`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          discordId: secOwnerId.trim(),
-          username: secOwnerName.trim(),
-          note: secOwnerNote.trim(),
-        }),
-      });
-      const json = await res.json().catch(() => null);
-      if (!res.ok) {
+      try {
+        const res = await aegisFetch(`/api/guilds/${activeGuildId}/secondary-owner`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            discordId: secOwnerId.trim(),
+            username: secOwnerName.trim(),
+            note: secOwnerNote.trim(),
+          }),
+        });
+        const json = await res.json().catch(() => null);
+        if (!res.ok) {
+          setFeedback({
+            ok: false,
+            text:
+              json?.message ||
+              (language === 'es'
+                ? 'Error al asignar Segundo Owner.'
+                : 'Error assigning Secondary Owner'),
+          });
+          return;
+        }
+        setSecondaryOwner(json.secondaryOwner);
+        setSecOwnerId('');
+        setSecOwnerName('');
+        setSecOwnerNote('');
+        setFeedback({ ok: true, text: c.common.saved });
+        onSyncCompleted();
+      } catch {
         setFeedback({
           ok: false,
           text:
-            json?.message ||
-            (language === 'es'
-              ? 'Error al asignar Segundo Owner.'
-              : 'Error assigning Secondary Owner'),
+            language === 'es'
+              ? 'Error de red al asignar Segundo Owner.'
+              : 'Network error assigning Secondary Owner.',
         });
-        return;
       }
-      setSecondaryOwner(json.secondaryOwner);
-      setSecOwnerId('');
-      setSecOwnerName('');
-      setSecOwnerNote('');
-      setFeedback({ ok: true, text: c.common.saved });
-      onSyncCompleted();
     };
 
     const handleRevoke = async () => {
-      const res = await aegisFetch(`/api/guilds/${activeGuildId}/secondary-owner`, {
-        method: 'DELETE',
-      });
-      if (res.ok) {
+      setFeedback(null);
+      try {
+        const res = await aegisFetch(`/api/guilds/${activeGuildId}/secondary-owner`, {
+          method: 'DELETE',
+        });
+        const json = await res.json().catch(() => null);
+        if (!res.ok) {
+          setFeedback({
+            ok: false,
+            text: json?.message || (language === 'es' ? 'No se pudo revocar el Segundo Owner.' : 'Failed to revoke Secondary Owner.'),
+          });
+          return;
+        }
         setSecondaryOwner(null);
         setFeedback({ ok: true, text: c.common.saved });
         onSyncCompleted();
+      } catch {
+        setFeedback({
+          ok: false,
+          text:
+            language === 'es'
+              ? 'Error de red al revocar al Segundo Owner.'
+              : 'Network error revoking Secondary Owner.',
+        });
       }
     };
 
@@ -1482,6 +1673,11 @@ export function GuildOpsSuiteViews({
         setFeedback({ ok: true, text: json?.message || c.common.saved });
         await loadPremiumBundle();
         onSyncCompleted();
+      } catch {
+        setFeedback({
+          ok: false,
+          text: isEs ? 'Error de red al canjear el código.' : 'Network error redeeming code.',
+        });
       } finally {
         setRedeemingCode(false);
       }

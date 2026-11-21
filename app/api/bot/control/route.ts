@@ -114,7 +114,7 @@ export async function POST(req: NextRequest) {
         type: 'PROTECTION_ENABLED',
         severity: 'LOW',
         title: 'Comandos Slash Desplegados',
-        message: `Se sincronizaron ${deployRes.commandCount} comandos slash principales (/antiraid, /antinuke, /security, /quarantine, /lockdown, /whitelist, /premium, /aegis) por servidor en ${deployRes.guildsSynced} servidores (duplicados globales eliminados).`,
+        message: `Se sincronizaron ${deployRes.commandCount} comandos slash principales (/antiraid, /antinuke, /seguridad, /cuarentena, /bloqueo, /whitelist, /premium, /aegis) por servidor en ${deployRes.guildsSynced} servidores (duplicados globales eliminados).`,
         groupedCount: 1,
       });
 

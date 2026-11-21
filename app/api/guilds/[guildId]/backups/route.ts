@@ -1,6 +1,10 @@
 import crypto from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
-import { evaluateAutoBackupSchedule, normalizePlanTier } from '@/lib/aegis/premium';
+import {
+  evaluateAutoBackupSchedule,
+  getPlanDisplayName,
+  normalizePlanTier,
+} from '@/lib/aegis/premium';
 import { backupActionSchema } from '@/lib/aegis/validators';
 import { requireAuthenticatedUser, requireGuildAuthorization } from '@/lib/server/auth-guard';
 import { fetchGuildChannelsLive, fetchGuildRolesLive } from '@/lib/server/discord-api';
@@ -88,7 +92,10 @@ export async function POST(
   if (d.action === 'RESTORE') {
     const backup = currentBackups.find((b) => b.id === d.backupId);
     if (!backup) {
-      return NextResponse.json({ error: 'NOT_FOUND', message: 'Backup not found' }, { status: 404 });
+      return NextResponse.json(
+        { error: 'NOT_FOUND', message: 'Copia de seguridad no encontrada.' },
+        { status: 404 }
+      );
     }
     if (backup.snapshot.antiRaidConfig) {
       state.antiRaidConfigs[guildId] = {
@@ -141,7 +148,7 @@ export async function POST(
     return NextResponse.json(
       {
         error: 'QUOTA_EXCEEDED',
-        message: `Has alcanzado el máximo de ${plan.quotas.maxBackups} backups en el plan ${plan.tier}.`,
+        message: `Has alcanzado el máximo de ${plan.quotas.maxBackups} copia(s) de seguridad en el ${getPlanDisplayName(normalizePlanTier(plan.tier), 'es')}.`,
       },
       { status: 402 }
     );
@@ -224,7 +231,10 @@ export async function DELETE(
 
   const id = req.nextUrl.searchParams.get('id');
   if (!id) {
-    return NextResponse.json({ error: 'VALIDATION_ERROR', message: 'Missing backup id' }, { status: 400 });
+    return NextResponse.json(
+      { error: 'VALIDATION_ERROR', message: 'Falta el ID de la copia de seguridad.' },
+      { status: 400 }
+    );
   }
 
   const { state, user } = auth.ctx;

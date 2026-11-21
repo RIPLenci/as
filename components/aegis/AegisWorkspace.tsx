@@ -176,44 +176,50 @@ export function AegisWorkspace({
   }, [language]);
 
   const loadWorkspaceData = useCallback(async () => {
-    const originParam =
-      typeof window !== 'undefined' ? `?origin=${encodeURIComponent(window.location.origin)}` : '';
-    const [srvRes, notifRes, sessionRes] = await Promise.all([
-      aegisFetch('/api/auth/servers'),
-      aegisFetch('/api/notifications'),
-      aegisFetch(`/api/auth/session${originParam}`),
-    ]);
+    try {
+      const originParam =
+        typeof window !== 'undefined' ? `?origin=${encodeURIComponent(window.location.origin)}` : '';
+      const [srvRes, notifRes, sessionRes] = await Promise.all([
+        aegisFetch('/api/auth/servers'),
+        aegisFetch('/api/notifications'),
+        aegisFetch(`/api/auth/session${originParam}`),
+      ]);
 
-    if (srvRes.status === 401 || notifRes.status === 401) {
-      setStoredSessionToken(null);
-      setUser(null);
-      setGuilds([]);
-      setNotifications([]);
-      return;
-    }
+      if (srvRes.status === 401 || notifRes.status === 401) {
+        setStoredSessionToken(null);
+        setUser(null);
+        setGuilds([]);
+        setNotifications([]);
+        return;
+      }
 
-    if (srvRes.ok) {
-      const srvJson = await srvRes.json();
-      const list = (srvJson.servers || []) as GuildRecord[];
-      setGuilds(list);
-      const manageable = list.filter((g) => g.userIsOwner || g.userIsSecondaryOwner);
-      setActiveGuildId((prev) => {
-        if (prev && manageable.some((g) => g.guildId === prev)) return prev;
-        const connected = manageable.find((g) => g.botStatus === 'BOT_CONNECTED');
-        return connected?.guildId ?? manageable[0]?.guildId ?? '';
-      });
-    }
+      if (srvRes.ok) {
+        const srvJson = await srvRes.json().catch(() => null);
+        const list = (srvJson?.servers || []) as GuildRecord[];
+        setGuilds(list);
+        const manageable = list.filter((g) => g.userIsOwner || g.userIsSecondaryOwner);
+        setActiveGuildId((prev) => {
+          if (prev && manageable.some((g) => g.guildId === prev)) return prev;
+          const connected = manageable.find((g) => g.botStatus === 'BOT_CONNECTED');
+          return connected?.guildId ?? manageable[0]?.guildId ?? '';
+        });
+      }
 
-    if (notifRes.ok) {
-      const notifJson = await notifRes.json();
-      setNotifications(notifJson.notifications || []);
-    }
+      if (notifRes.ok) {
+        const notifJson = await notifRes.json().catch(() => null);
+        if (notifJson) setNotifications(notifJson.notifications || []);
+      }
 
-    if (sessionRes.ok) {
-      const sJson = (await sessionRes.json()) as SessionResponse;
-      setSystemHealth(sJson.systemHealth);
-      setOauthConfigured(sJson.oauthConfigured);
-      setExpectedCallbackUrl(sJson.expectedCallbackUrl);
+      if (sessionRes.ok) {
+        const sJson = (await sessionRes.json().catch(() => null)) as SessionResponse | null;
+        if (sJson) {
+          setSystemHealth(sJson.systemHealth);
+          setOauthConfigured(sJson.oauthConfigured);
+          setExpectedCallbackUrl(sJson.expectedCallbackUrl);
+        }
+      }
+    } catch {
+      // Keep current workspace state intact if a background refresh fails
     }
   }, []);
 
@@ -259,6 +265,52 @@ export function AegisWorkspace({
           setTheme(data.user.theme || 'dark');
           if (withWelcome) setShowWelcome(true);
           await loadWorkspaceData();
+
+          if (typeof window !== 'undefined') {
+            const sp = new URLSearchParams(window.location.search);
+            const targetSec = sp.get('section') as NavSectionId | null;
+            const validSections: ReadonlySet<string> = new Set([
+              'overview',
+              'servers',
+              'admin-panel',
+              'monitor',
+              'incidents',
+              'protection-overview',
+              'join-protection',
+              'anti-nuke',
+              'risk-engine',
+              'additional-security',
+              'bot-permissions',
+              'verification',
+              'log-channel',
+              'backups',
+              'two-factor',
+              'secondary-owner',
+              'premium',
+              'quarantine',
+              'lockdown',
+              'whitelist',
+              'audit-logs',
+              'settings',
+            ]);
+            if (targetSec && validSections.has(targetSec)) {
+              if (targetSec !== 'admin-panel' || isSuperOwner(data.user)) {
+                if (targetSec === 'servers') {
+                  setEnteredGuildId('');
+                  setActiveSection('overview');
+                } else {
+                  setActiveSection(targetSec);
+                }
+              }
+              sp.delete('section');
+              const remaining = sp.toString();
+              window.history.replaceState(
+                {},
+                '',
+                `${window.location.pathname}${remaining ? `?${remaining}` : ''}${window.location.hash}`
+              );
+            }
+          }
           return;
         }
 
@@ -334,32 +386,44 @@ export function AegisWorkspace({
   const handleLanguageChange = async (nextLang: LanguageCode) => {
     setLanguage(nextLang);
     if (user) {
-      await aegisFetch('/api/preferences', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ language: nextLang }),
-      });
+      try {
+        await aegisFetch('/api/preferences', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ language: nextLang }),
+        });
+      } catch {
+        // Local language selection still applies immediately
+      }
     }
   };
 
   const handleThemeChange = async (nextTheme: ThemeMode) => {
     setTheme(nextTheme);
     if (user) {
-      await aegisFetch('/api/preferences', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ theme: nextTheme }),
-      });
+      try {
+        await aegisFetch('/api/preferences', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ theme: nextTheme }),
+        });
+      } catch {
+        // Local theme selection still applies immediately
+      }
     }
   };
 
   const handleMarkAllRead = async () => {
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
-    await aegisFetch('/api/notifications', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ markAllRead: true }),
-    });
+    try {
+      await aegisFetch('/api/notifications', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ markAllRead: true }),
+      });
+    } catch {
+      // Ignore transient failure marking notifications read
+    }
   };
 
   const handleLogout = async () => {

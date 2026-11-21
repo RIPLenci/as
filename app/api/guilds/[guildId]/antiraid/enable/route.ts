@@ -23,7 +23,7 @@ export async function POST(
     return NextResponse.json(
       {
         error: 'BOT_PRECONDITION_FAILED',
-        message: 'Bot must be connected with required security permissions before enabling Anti-Raid.',
+        message: 'El bot debe estar conectado con los permisos de seguridad requeridos antes de activar Anti-Raid.',
       },
       { status: 409 }
     );
@@ -44,8 +44,8 @@ export async function POST(
     guildId,
     type: 'PROTECTION_ENABLED',
     severity: 'LOW',
-    title: `Anti-Raid Protection Enabled — ${guard.guild.name}`,
-    message: `Mode ${config.mode} active (threshold ${config.maxJoins} joins / ${config.timeWindowSeconds}s).`,
+    title: `Protección Anti-Raid Activada — ${guard.guild.name}`,
+    message: `Modo ${config.mode} activo (umbral ${config.maxJoins} ingresos / ${config.timeWindowSeconds}s).`,
     groupedCount: 1,
   });
 

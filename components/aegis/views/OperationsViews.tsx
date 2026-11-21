@@ -15,7 +15,7 @@ import type {
 import { getDict } from '@/lib/aegis/i18n';
 import { getSuiteCopy } from '@/lib/aegis/dashboard-i18n';
 import { aegisFetch } from '@/lib/aegis/client-auth';
-import { isPaidTier, normalizePlanTier } from '@/lib/aegis/premium';
+import { getPlanDisplayName, normalizePlanTier } from '@/lib/aegis/premium';
 
 interface OperationsViewsProps {
   section: 'quarantine' | 'lockdown' | 'whitelist';
@@ -184,36 +184,44 @@ export function OperationsViews({
     e.preventDefault();
     setError(null);
     setFeedback(null);
-    const res = await aegisFetch('/api/quarantine', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        guildId: activeGuildId,
-        discordId: qDiscordId.trim(),
-        username: qUsername.trim(),
-        reason: qReason.trim(),
-        durationHours: qHours,
-      }),
-    });
-    const json = await res.json();
-    if (!res.ok) {
-      setError(
-        json.issues?.[0]?.message ||
-          json.message ||
-          (isEs ? 'Error de validación' : 'Validation error')
+    try {
+      const res = await aegisFetch('/api/quarantine', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          guildId: activeGuildId,
+          discordId: qDiscordId.trim(),
+          username: qUsername.trim(),
+          reason: qReason.trim(),
+          durationHours: qHours,
+        }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) {
+        setError(
+          json?.issues?.[0]?.message ||
+            json?.message ||
+            (isEs ? 'Error de validación' : 'Validation error')
+        );
+        return;
+      }
+      setQDiscordId('');
+      setQUsername('');
+      setQReason('');
+      setFeedback(
+        isEs
+          ? 'Miembro puesto en cuarentena y registrado en auditoría.'
+          : 'Member quarantined and recorded in audit log.'
       );
-      return;
+      await loadData();
+      onSyncCompleted();
+    } catch {
+      setError(
+        isEs
+          ? 'Error de red al crear entrada de cuarentena.'
+          : 'Network error creating quarantine entry.'
+      );
     }
-    setQDiscordId('');
-    setQUsername('');
-    setQReason('');
-    setFeedback(
-      isEs
-        ? 'Miembro puesto en cuarentena y registrado en auditoría.'
-        : 'Member quarantined and recorded in audit log.'
-    );
-    await loadData();
-    onSyncCompleted();
   };
 
   const handleQuarantineAction = async (id: string, action: 'RELEASE' | 'EXTEND') => {
@@ -257,71 +265,87 @@ export function OperationsViews({
   const handleLockdown = async (action: 'ACTIVATE' | 'DEACTIVATE') => {
     setError(null);
     setFeedback(null);
-    const res = await aegisFetch(`/api/guilds/${activeGuildId}/lockdown`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        action,
-        mode: 'MANUAL',
-        reason: lockReason.trim() || undefined,
-        durationMinutes: lockMinutes,
-        restrictions: lockdown?.restrictions,
-      }),
-    });
-    const json = await res.json();
-    if (!res.ok) {
-      setError(
-        json.message || (isEs ? 'Error en acción de lockdown.' : 'Lockdown action failed.')
+    try {
+      const res = await aegisFetch(`/api/guilds/${activeGuildId}/lockdown`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action,
+          mode: 'MANUAL',
+          reason: lockReason.trim() || undefined,
+          durationMinutes: lockMinutes,
+          restrictions: lockdown?.restrictions,
+        }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) {
+        setError(
+          json?.message || (isEs ? 'Error en acción de lockdown.' : 'Lockdown action failed.')
+        );
+        return;
+      }
+      setLockdown(json.lockdown);
+      setFeedback(
+        action === 'ACTIVATE'
+          ? isEs
+            ? 'Lockdown de emergencia activado con instantánea previa de permisos.'
+            : 'Emergency Lockdown activated with pre-lockdown permission snapshot.'
+          : isEs
+          ? 'Permisos originales de canales restaurados de forma segura.'
+          : 'Original channel permissions restored safely.'
       );
-      return;
+      onSyncCompleted();
+    } catch {
+      setError(
+        isEs
+          ? 'Error de red al ejecutar acción de bloqueo.'
+          : 'Network error executing lockdown action.'
+      );
     }
-    setLockdown(json.lockdown);
-    setFeedback(
-      action === 'ACTIVATE'
-        ? isEs
-          ? 'Lockdown de emergencia activado con instantánea previa de permisos.'
-          : 'Emergency Lockdown activated with pre-lockdown permission snapshot.'
-        : isEs
-        ? 'Permisos originales de canales restaurados de forma segura.'
-        : 'Original channel permissions restored safely.'
-    );
-    onSyncCompleted();
   };
 
   const handleWhitelistAdd = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setFeedback(null);
-    const res = await aegisFetch(`/api/guilds/${activeGuildId}/whitelist`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        targetId: wTargetId.trim(),
-        targetName: wTargetName.trim(),
-        targetType: wTargetType,
-        reason: wReason.trim(),
-        excludedRules: wRules,
-      }),
-    });
-    const json = await res.json();
-    if (!res.ok) {
-      setError(
-        json.issues?.[0]?.message ||
-          json.message ||
-          (isEs ? 'Error de validación' : 'Validation error')
+    try {
+      const res = await aegisFetch(`/api/guilds/${activeGuildId}/whitelist`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          targetId: wTargetId.trim(),
+          targetName: wTargetName.trim(),
+          targetType: wTargetType,
+          reason: wReason.trim(),
+          excludedRules: wRules,
+        }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) {
+        setError(
+          json?.issues?.[0]?.message ||
+            json?.message ||
+            (isEs ? 'Error de validación' : 'Validation error')
+        );
+        return;
+      }
+      setWTargetId('');
+      setWTargetName('');
+      setWReason('');
+      setFeedback(
+        isEs
+          ? 'Entrada de whitelist con alcance por regla creada.'
+          : 'Rule-scoped whitelist entry created.'
       );
-      return;
+      await loadData();
+      onSyncCompleted();
+    } catch {
+      setError(
+        isEs
+          ? 'Error de red al agregar a la whitelist.'
+          : 'Network error adding whitelist entry.'
+      );
     }
-    setWTargetId('');
-    setWTargetName('');
-    setWReason('');
-    setFeedback(
-      isEs
-        ? 'Entrada de whitelist con alcance por regla creada.'
-        : 'Rule-scoped whitelist entry created.'
-    );
-    await loadData();
-    onSyncCompleted();
   };
 
   const handleWhitelistRevoke = async (id: string) => {
@@ -644,7 +668,7 @@ export function OperationsViews({
                 {suiteCopy.whitelistExtra.title}
               </h1>
               <p className="text-sm text-slate-600 dark:text-slate-400 mt-0.5">
-                {isPaidTier(normalizePlanTier(whitelistPlan?.tier)) ? 'PLAN PREMIUM' : 'PLAN FREE'}
+                {getPlanDisplayName(normalizePlanTier(whitelistPlan?.tier), language).toUpperCase()}
               </p>
             </div>
           </div>
@@ -842,30 +866,38 @@ export function OperationsViews({
                 e.preventDefault();
                 setError(null);
                 setFeedback(null);
-                const res = await aegisFetch(`/api/guilds/${activeGuildId}/whitelist`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    kind: 'CHANNEL',
-                    channelId: cChannelId.trim(),
-                    channelName: cChannelName.trim(),
-                    reason: cReason.trim(),
-                  }),
-                });
-                const json = await res.json().catch(() => null);
-                if (!res.ok) {
+                try {
+                  const res = await aegisFetch(`/api/guilds/${activeGuildId}/whitelist`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      kind: 'CHANNEL',
+                      channelId: cChannelId.trim(),
+                      channelName: cChannelName.trim(),
+                      reason: cReason.trim(),
+                    }),
+                  });
+                  const json = await res.json().catch(() => null);
+                  if (!res.ok) {
+                    setError(
+                      json?.message ||
+                        (isEs ? 'Error al agregar canal a whitelist.' : 'Error adding channel to whitelist.')
+                    );
+                    return;
+                  }
+                  setCChannelId('');
+                  setCChannelName('');
+                  setCReason('');
+                  setFeedback(suiteCopy.common.saved);
+                  await loadData();
+                  onSyncCompleted();
+                } catch {
                   setError(
-                    json?.message ||
-                      (isEs ? 'Error al agregar canal a whitelist.' : 'Error adding channel to whitelist.')
+                    isEs
+                      ? 'Error de red al agregar canal a whitelist.'
+                      : 'Network error adding channel to whitelist.'
                   );
-                  return;
                 }
-                setCChannelId('');
-                setCChannelName('');
-                setCReason('');
-                setFeedback(suiteCopy.common.saved);
-                await loadData();
-                onSyncCompleted();
               }}
               className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end"
             >
@@ -936,15 +968,34 @@ export function OperationsViews({
                     <button
                       type="button"
                       onClick={async () => {
-                        const res = await aegisFetch(
-                          `/api/guilds/${activeGuildId}/whitelist?kind=CHANNEL&id=${encodeURIComponent(
-                            ch.id
-                          )}`,
-                          { method: 'DELETE' }
-                        );
-                        if (res.ok) {
+                        setError(null);
+                        setFeedback(null);
+                        try {
+                          const res = await aegisFetch(
+                            `/api/guilds/${activeGuildId}/whitelist?kind=CHANNEL&id=${encodeURIComponent(
+                              ch.id
+                            )}`,
+                            { method: 'DELETE' }
+                          );
+                          const json = await res.json().catch(() => null);
+                          if (!res.ok) {
+                            setError(
+                              json?.message ||
+                                (isEs
+                                  ? 'No se pudo quitar el canal de whitelist.'
+                                  : 'Failed to remove channel from whitelist.')
+                            );
+                            return;
+                          }
+                          setFeedback(isEs ? 'Canal eliminado de la whitelist.' : 'Channel removed from whitelist.');
                           await loadData();
                           onSyncCompleted();
+                        } catch {
+                          setError(
+                            isEs
+                              ? 'Error de red al quitar el canal de whitelist.'
+                              : 'Network error removing channel from whitelist.'
+                          );
                         }
                       }}
                       className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-red-500/35 text-red-500 hover:bg-red-500/10 cursor-pointer"

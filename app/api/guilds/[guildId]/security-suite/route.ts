@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { isPaidTier, normalizePlanTier } from '@/lib/aegis/premium';
+import { getPlanDisplayName, isPaidTier, normalizePlanTier } from '@/lib/aegis/premium';
 import { securitySuitePatchSchema } from '@/lib/aegis/validators';
 import { requireAuthenticatedUser, requireGuildAuthorization } from '@/lib/server/auth-guard';
 import { aegisStore } from '@/lib/server/store';
@@ -198,7 +198,7 @@ export async function PATCH(
         return NextResponse.json(
           {
             error: 'QUOTA_EXCEEDED',
-            message: `Has alcanzado el límite de ${plan.quotas.maxAllowedDomains} dominios permitidos en el plan ${plan.tier}.`,
+            message: `Has alcanzado el límite de ${plan.quotas.maxAllowedDomains} dominios permitidos en el ${getPlanDisplayName(normalizePlanTier(plan.tier), 'es')}.`,
           },
           { status: 402 }
         );

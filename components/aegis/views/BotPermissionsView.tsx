@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
+  AlertTriangle,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
@@ -10,6 +11,7 @@ import {
   Info,
   Lock,
   Plus,
+  RefreshCw,
   ShieldCheck,
   Trash2,
   UserX,
@@ -74,16 +76,34 @@ export function BotPermissionsView({
   const [rateLimitActions, setRateLimitActions] = useState(5);
   const [rateLimitWindowMinutes, setRateLimitWindowMinutes] = useState(10);
   const [submitting, setSubmitting] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [reloadNonce, setReloadNonce] = useState(0);
   const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
 
   const reload = async () => {
     if (!activeGuildId) return;
-    const res = await aegisFetch(`/api/guilds/${activeGuildId}/bot-permissions`);
-    const json = await res.json().catch(() => null);
-    if (res.ok && json) {
-      setGrants(json.grants || []);
-      setPlan(json.plan);
-      setUsage(json.usage);
+    try {
+      const res = await aegisFetch(`/api/guilds/${activeGuildId}/bot-permissions`);
+      const json = await res.json().catch(() => null);
+      if (res.ok && json) {
+        setLoadError(null);
+        setGrants(json.grants || []);
+        setPlan(json.plan);
+        setUsage(json.usage);
+      } else {
+        setLoadError(
+          json?.message ||
+            (language === 'es'
+              ? 'No se pudieron cargar los permisos del bot.'
+              : 'Failed to load bot permissions.')
+        );
+      }
+    } catch {
+      setLoadError(
+        language === 'es'
+          ? 'Error de red al cargar permisos del bot.'
+          : 'Network error while loading bot permissions.'
+      );
     }
   };
 
@@ -99,11 +119,29 @@ export function BotPermissionsView({
       try {
         const res = await aegisFetch(`/api/guilds/${activeGuildId}/bot-permissions`);
         const json = await res.json().catch(() => null);
-        if (cancelled || !res.ok || !json) return;
+        if (cancelled) return;
+        if (!res.ok || !json) {
+          setLoadError(
+            json?.message ||
+              (language === 'es'
+                ? 'No se pudieron cargar los permisos del bot.'
+                : 'Failed to load bot permissions.')
+          );
+          return;
+        }
+        setLoadError(null);
         loadedGuildRef.current = activeGuildId;
         setGrants(json.grants || []);
         setPlan(json.plan);
         setUsage(json.usage);
+      } catch {
+        if (!cancelled) {
+          setLoadError(
+            language === 'es'
+              ? 'Error de red al cargar permisos del bot.'
+              : 'Network error while loading bot permissions.'
+          );
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -112,7 +150,7 @@ export function BotPermissionsView({
     return () => {
       cancelled = true;
     };
-  }, [activeGuildId, syncNonce]);
+  }, [activeGuildId, syncNonce, reloadNonce, language]);
 
   if (!activeGuildId) {
     return (
@@ -152,7 +190,14 @@ export function BotPermissionsView({
       });
       const json = await res.json().catch(() => null);
       if (!res.ok) {
-        setFeedback({ ok: false, text: json?.message || 'Error granting bot permissions.' });
+        setFeedback({
+          ok: false,
+          text:
+            json?.message ||
+            (language === 'es'
+              ? 'Error al otorgar permisos del bot.'
+              : 'Error granting bot permissions.'),
+        });
         return;
       }
       setTargetId('');
@@ -161,18 +206,47 @@ export function BotPermissionsView({
       setFeedback({ ok: true, text: c.common.saved });
       await reload();
       onSyncCompleted();
+    } catch {
+      setFeedback({
+        ok: false,
+        text:
+          language === 'es'
+            ? 'Error de red al otorgar permisos del bot.'
+            : 'Network error while granting bot permissions.',
+      });
     } finally {
       setSubmitting(false);
     }
   };
 
   const handleDelete = async (id: string) => {
-    const res = await aegisFetch(`/api/guilds/${activeGuildId}/bot-permissions?id=${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-    });
-    if (res.ok) {
+    setFeedback(null);
+    try {
+      const res = await aegisFetch(`/api/guilds/${activeGuildId}/bot-permissions?id=${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) {
+        setFeedback({
+          ok: false,
+          text:
+            json?.message ||
+            (language === 'es'
+              ? 'No se pudo revocar el permiso.'
+              : 'Failed to revoke permission.'),
+        });
+        return;
+      }
       await reload();
       onSyncCompleted();
+    } catch {
+      setFeedback({
+        ok: false,
+        text:
+          language === 'es'
+            ? 'Error de red al revocar el permiso.'
+            : 'Network error while revoking permission.',
+      });
     }
   };
 
@@ -250,7 +324,7 @@ export function BotPermissionsView({
                       <Crown className="w-3 h-3 text-amber-400" /> {getPlanDisplayName(normalizePlanTier(plan?.tier), language).toUpperCase()}
                     </>
                   ) : (
-                    'PLAN FREE'
+                    getPlanDisplayName('FREE', language).toUpperCase()
                   )}
                 </button>
               </div>
@@ -258,6 +332,26 @@ export function BotPermissionsView({
           )}
         </AnimatePresence>
       </div>
+
+      {loadError && (
+        <div
+          role="alert"
+          className="rounded-xl px-4 py-3 text-xs font-medium flex items-center justify-between gap-3 border bg-red-500/10 border-red-500/30 text-red-600 dark:text-red-300"
+        >
+          <span className="inline-flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+            <span>{loadError}</span>
+          </span>
+          <button
+            type="button"
+            onClick={() => setReloadNonce((n) => n + 1)}
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-red-500/15 hover:bg-red-500/25 font-semibold cursor-pointer shrink-0"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>{language === 'es' ? 'Reintentar' : 'Retry'}</span>
+          </button>
+        </div>
+      )}
 
       {feedback && (
         <div

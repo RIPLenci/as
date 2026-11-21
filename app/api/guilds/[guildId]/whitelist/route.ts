@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
+import { getPlanDisplayName, normalizePlanTier } from '@/lib/aegis/premium';
 import { channelWhitelistCreateSchema, whitelistCreateSchema } from '@/lib/aegis/validators';
 import { requireAuthenticatedUser, requireGuildAuthorization } from '@/lib/server/auth-guard';
 import { aegisStore } from '@/lib/server/store';
@@ -67,7 +68,7 @@ export async function POST(
       return NextResponse.json(
         {
           error: 'QUOTA_EXCEEDED',
-          message: `Límite de canales en whitelist (${plan.quotas.maxWhitelistChannels}) alcanzado en el plan ${plan.tier}.`,
+          message: `Límite de canales en whitelist (${plan.quotas.maxWhitelistChannels}) alcanzado en el ${getPlanDisplayName(normalizePlanTier(plan.tier), 'es')}.`,
         },
         { status: 402 }
       );
@@ -117,7 +118,7 @@ export async function POST(
     return NextResponse.json(
       {
         error: 'QUOTA_EXCEEDED',
-        message: `Límite de usuarios en whitelist (${plan.quotas.maxWhitelistUsers}) alcanzado en el plan ${plan.tier}.`,
+        message: `Límite de usuarios en whitelist (${plan.quotas.maxWhitelistUsers}) alcanzado en el ${getPlanDisplayName(normalizePlanTier(plan.tier), 'es')}.`,
       },
       { status: 402 }
     );
@@ -168,7 +169,10 @@ export async function DELETE(
   const id = req.nextUrl.searchParams.get('id');
   const kind = req.nextUrl.searchParams.get('kind');
   if (!id) {
-    return NextResponse.json({ error: 'VALIDATION_ERROR', message: 'Missing entry id' }, { status: 400 });
+    return NextResponse.json(
+      { error: 'VALIDATION_ERROR', message: 'Falta el ID de la entrada en whitelist.' },
+      { status: 400 }
+    );
   }
 
   const { state, user } = auth.ctx;

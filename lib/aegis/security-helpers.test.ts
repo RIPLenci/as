@@ -232,3 +232,143 @@ test('aegisStore syncGuildRecord, upsertWhitelistEntry, upsertQuarantineEntry, a
   }
   assert.equal(state.incidents.length, 500);
 });
+
+test('aegisStore.assignGuildPremiumSlot reconstructs missing guildPlans when guildId already holds an active slot', () => {
+  const state = createEmptyState();
+  const discordId = SUPER_OWNER_DISCORD_ID;
+  const guildId = '777666555444333222';
+  const futureIso = new Date(Date.now() + 86_400_000).toISOString();
+
+  state.userSubscriptions[discordId] = {
+    discordId,
+    username: 'Owner',
+    tier: 'DIAMANTE',
+    activatedAt: new Date(Date.now() - 3600_000).toISOString(),
+    expiresAt: futureIso,
+    activatedBy: 'SYSTEM',
+    source: 'STAFF_PANEL',
+    reason: 'Regression test',
+    activatedGuildIds: [guildId],
+    updatedAt: new Date(Date.now() - 3600_000).toISOString(),
+  };
+
+  // Simulate stale state where activatedGuildIds contains guildId, but guildPlans[guildId] was missing
+  delete state.guildPlans[guildId];
+
+  const result = aegisStore.assignGuildPremiumSlot(state, {
+    discordId,
+    guildId,
+    username: 'Owner',
+  });
+
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.equal(result.plan.guildId, guildId);
+    assert.equal(result.plan.tier, 'DIAMANTE');
+    assert.equal(result.plan.expiresAt, futureIso);
+    assert.equal(state.guildPlans[guildId]?.tier, 'DIAMANTE');
+    assert.ok(state.antiRaidConfigs[guildId]);
+  }
+});
+
+test('aegisStore.buildOverviewAnalytics counts incidents at exact nowMs in final bucket and enforces guild isolation', async () => {
+  const state = createEmptyState();
+  const targetGuildId = '111222333444555666';
+  const otherGuildId = '999888777666555444';
+  const exactNowIso = new Date().toISOString();
+
+  aegisStore.pushIncident(state, {
+    id: 'INC-BOUNDARY',
+    guildId: targetGuildId,
+    guildName: 'Target Server',
+    threatType: 'JOIN_RAID',
+    riskScore: 95,
+    riskLevel: 'CRITICAL',
+    affectedUserId: '555444333222111000',
+    affectedUsername: 'raider',
+    responsibleUserId: '555444333222111000',
+    responsibleUsername: 'raider',
+    appliedAction: 'BAN',
+    status: 'MITIGATED',
+    assignedTo: null,
+    evidenceSummary: 'Exact boundary timestamp check',
+    signals: [],
+    comments: [],
+    createdAt: exactNowIso,
+    updatedAt: exactNowIso,
+  });
+
+  aegisStore.pushIncident(state, {
+    id: 'INC-OTHER-GUILD',
+    guildId: otherGuildId,
+    guildName: 'Other Server',
+    threatType: 'JOIN_RAID',
+    riskScore: 90,
+    riskLevel: 'CRITICAL',
+    affectedUserId: '444333222111000999',
+    affectedUsername: 'other_raider',
+    responsibleUserId: '444333222111000999',
+    responsibleUsername: 'other_raider',
+    appliedAction: 'BAN',
+    status: 'MITIGATED',
+    assignedTo: null,
+    evidenceSummary: 'Must not leak across guilds',
+    signals: [],
+    comments: [],
+    createdAt: exactNowIso,
+    updatedAt: exactNowIso,
+  });
+
+  const origGetState = aegisStore.getState.bind(aegisStore);
+  const origGetHealth = aegisStore.getSystemHealth.bind(aegisStore);
+  try {
+    aegisStore.getState = async () => state;
+    aegisStore.getSystemHealth = async () => ({
+      api: 'ONLINE',
+      mongodb: 'ONLINE',
+      redis: 'ONLINE',
+      bot: 'ONLINE',
+      degradedMode: false,
+      lastSynchronization: exactNowIso,
+      l1CacheStats: {
+        entries: 0,
+        maxEntries: 5000,
+        hits: 0,
+        misses: 0,
+        hitRatePercent: 100,
+      },
+      botIdentity: {
+        configured: true,
+        tag: 'AEGIS#0001',
+        id: '100000000000000000',
+        avatarUrl: null,
+        pingMs: 12,
+        guildCount: 1,
+        userCount: 10,
+      },
+      shards: [],
+      cluster: {
+        totalShards: 1,
+        onlineShards: 1,
+        avgLatencyMs: 12,
+        totalRamMb: 64,
+        totalServers: 1,
+        totalMembers: 10,
+        lastSyncAt: exactNowIso,
+      },
+      slashCommands: [],
+      oauthConfigured: true,
+    });
+
+    const analytics = await aegisStore.buildOverviewAnalytics('24h', targetGuildId, [targetGuildId]);
+    assert.equal(analytics.metrics.totalRaidsDetected.value, 1);
+    const totalBucketRaids = analytics.securityActivity.reduce((sum, b) => sum + b.detectedRaids, 0);
+    assert.equal(totalBucketRaids, 1);
+    assert.equal(analytics.securityActivity[analytics.securityActivity.length - 1].detectedRaids, 1);
+    assert.equal(analytics.recentIncidents.length, 1);
+    assert.equal(analytics.recentIncidents[0].guildId, targetGuildId);
+  } finally {
+    aegisStore.getState = origGetState;
+    aegisStore.getSystemHealth = origGetHealth;
+  }
+});

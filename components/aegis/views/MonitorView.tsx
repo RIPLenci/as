@@ -26,21 +26,43 @@ export function MonitorView({
   const [events, setEvents] = useState<SecurityEventRecord[]>([]);
   const [paused, setPaused] = useState(false);
   const [riskFilter, setRiskFilter] = useState('ALL');
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     const fetchLatest = () => {
       if (!activeGuildId) {
         setEvents([]);
+        setFetchError(null);
         return;
       }
       const qs = new URLSearchParams({ guildId: activeGuildId });
       if (riskFilter !== 'ALL') qs.set('risk', riskFilter);
-      aegisFetch(`/api/realtime/events?${qs.toString()}`).then(async (res) => {
-        if (!res.ok || cancelled) return;
-        const json = await res.json();
-        if (!cancelled && !paused) setEvents(json.events || []);
-      });
+      aegisFetch(`/api/realtime/events?${qs.toString()}`)
+        .then(async (res) => {
+          const json = await res.json().catch(() => null);
+          if (cancelled) return;
+          if (!res.ok) {
+            setFetchError(
+              json?.message ||
+                (isEs
+                  ? 'Error al consultar los eventos en tiempo real.'
+                  : 'Failed to load real-time events.')
+            );
+            return;
+          }
+          setFetchError(null);
+          if (!paused && json) setEvents(json.events || []);
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setFetchError(
+              isEs
+                ? 'Error de conexión con el monitor de eventos.'
+                : 'Connection error with the event monitor.'
+            );
+          }
+        });
     };
 
     fetchLatest();
@@ -54,7 +76,7 @@ export function MonitorView({
       cancelled = true;
       clearInterval(timer);
     };
-  }, [paused, activeGuildId, riskFilter, syncNonce]);
+  }, [paused, activeGuildId, riskFilter, syncNonce, isEs]);
 
   const handleExport = () => {
     const blob = new Blob([JSON.stringify(events, null, 2)], {
@@ -70,6 +92,14 @@ export function MonitorView({
 
   return (
     <div className="space-y-6">
+      {fetchError && (
+        <div
+          role="alert"
+          className="p-3.5 rounded-xl bg-red-500/10 border border-red-500/30 text-xs text-red-600 dark:text-red-300"
+        >
+          {fetchError}
+        </div>
+      )}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
           <h1 className="font-display text-2xl font-bold text-slate-900 dark:text-white">

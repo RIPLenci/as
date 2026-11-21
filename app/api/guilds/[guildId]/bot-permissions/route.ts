@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
+import { getPlanDisplayName, normalizePlanTier } from '@/lib/aegis/premium';
 import { botPermissionCreateSchema } from '@/lib/aegis/validators';
 import { requireAuthenticatedUser, requireGuildAuthorization } from '@/lib/server/auth-guard';
 import { aegisStore } from '@/lib/server/store';
@@ -70,7 +71,7 @@ export async function POST(
       return NextResponse.json(
         {
           error: 'QUOTA_EXCEEDED',
-          message: `Límite de usuarios (${plan.quotas.maxBotPermUsers}) alcanzado en el plan ${plan.tier}.`,
+          message: `Límite de usuarios (${plan.quotas.maxBotPermUsers}) alcanzado en el ${getPlanDisplayName(normalizePlanTier(plan.tier), 'es')}.`,
         },
         { status: 402 }
       );
@@ -79,7 +80,7 @@ export async function POST(
       return NextResponse.json(
         {
           error: 'QUOTA_EXCEEDED',
-          message: `Límite de roles (${plan.quotas.maxBotPermRoles}) alcanzado en el plan ${plan.tier}.`,
+          message: `Límite de roles (${plan.quotas.maxBotPermRoles}) alcanzado en el ${getPlanDisplayName(normalizePlanTier(plan.tier), 'es')}.`,
         },
         { status: 402 }
       );
@@ -141,7 +142,10 @@ export async function DELETE(
 
   const id = req.nextUrl.searchParams.get('id');
   if (!id) {
-    return NextResponse.json({ error: 'VALIDATION_ERROR', message: 'Missing grant id' }, { status: 400 });
+    return NextResponse.json(
+      { error: 'VALIDATION_ERROR', message: 'Falta el ID del permiso.' },
+      { status: 400 }
+    );
   }
 
   const { state, user } = auth.ctx;

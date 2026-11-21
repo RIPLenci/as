@@ -288,7 +288,7 @@ export async function POST(req: NextRequest) {
         code: 'UNCONFIGURED',
         guild,
         message:
-          'DISCORD_BOT_TOKEN is not configured on the server; real bot verification requires DISCORD_BOT_TOKEN.',
+          'DISCORD_BOT_TOKEN no está configurado en el servidor; la verificación real del bot requiere DISCORD_BOT_TOKEN.',
       },
       { status: 503 }
     );
@@ -303,7 +303,7 @@ export async function POST(req: NextRequest) {
           code: 'INVALID_BOT_TOKEN',
           guild,
           message:
-            'Discord rejected DISCORD_BOT_TOKEN (401 Unauthorized). Verify the Bot Token in server environment variables.',
+            'Discord rechazó DISCORD_BOT_TOKEN (401). Verifica el token del bot en las variables de entorno.',
         },
         { status: 502 }
       );
@@ -316,8 +316,8 @@ export async function POST(req: NextRequest) {
           guild,
           message:
             verification.reason === 'RATE_LIMITED'
-              ? 'Discord API temporarily rate-limited verification. Retry in a few seconds.'
-              : 'Temporary network error contacting Discord API. Retry shortly.',
+              ? 'La API de Discord limitó temporalmente la verificación. Reintenta en unos segundos.'
+              : 'Error temporal de red al contactar con la API de Discord. Reintenta en breve.',
         },
         { status: 503 }
       );

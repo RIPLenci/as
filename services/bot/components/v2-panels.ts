@@ -3,6 +3,8 @@ import {
   ButtonBuilder,
   ButtonStyle,
   ContainerBuilder,
+  MediaGalleryBuilder,
+  MediaGalleryItemBuilder,
   MessageFlags,
   SectionBuilder,
   SeparatorBuilder,
@@ -146,7 +148,12 @@ export function buildCriticalAlertV2(params: {
   };
 }
 
-export function buildSimpleNoticeV2(title: string, lines: string[], accentColor = 0x5865f2) {
+export function buildSimpleNoticeV2(
+  title: string,
+  lines: string[],
+  accentColor = 0x5865f2,
+  attachmentNames?: string[]
+) {
   const container = new ContainerBuilder()
     .setAccentColor(accentColor)
     .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## ${title}`))
@@ -154,6 +161,15 @@ export function buildSimpleNoticeV2(title: string, lines: string[], accentColor 
       new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true)
     )
     .addTextDisplayComponents(new TextDisplayBuilder().setContent(lines.join('\n')));
+
+  if (attachmentNames && attachmentNames.length > 0) {
+    const gallery = new MediaGalleryBuilder().addItems(
+      attachmentNames.slice(0, 5).map((name) =>
+        new MediaGalleryItemBuilder().setURL(`attachment://${name}`)
+      )
+    );
+    container.addMediaGalleryComponents(gallery);
+  }
 
   return {
     flags: MessageFlags.IsComponentsV2 as const,

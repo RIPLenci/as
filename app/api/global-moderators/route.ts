@@ -1,26 +1,20 @@
 import crypto from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { globalModeratorCreateSchema } from '@/lib/aegis/validators';
-import { requireAuthenticatedUser, requireGlobalPermission } from '@/lib/server/auth-guard';
+import { requireSuperOwner } from '@/lib/server/auth-guard';
 import { getServerEnv } from '@/lib/server/env';
 import { aegisStore } from '@/lib/server/store';
 
 export async function GET() {
-  const auth = await requireAuthenticatedUser();
+  const auth = await requireSuperOwner();
   if (!auth.ok) return auth.response;
-
-  const perm = requireGlobalPermission(auth.ctx, 'globalban:read');
-  if (!perm.ok) return perm.response;
 
   return NextResponse.json({ moderators: auth.ctx.state.globalModerators });
 }
 
 export async function POST(req: NextRequest) {
-  const auth = await requireAuthenticatedUser();
+  const auth = await requireSuperOwner();
   if (!auth.ok) return auth.response;
-
-  const perm = requireGlobalPermission(auth.ctx, 'moderators:manage');
-  if (!perm.ok) return perm.response;
 
   const body = await req.json().catch(() => null);
   const parsed = globalModeratorCreateSchema.safeParse(body);
@@ -104,11 +98,8 @@ export async function POST(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
-  const auth = await requireAuthenticatedUser();
+  const auth = await requireSuperOwner();
   if (!auth.ok) return auth.response;
-
-  const perm = requireGlobalPermission(auth.ctx, 'moderators:manage');
-  if (!perm.ok) return perm.response;
 
   const id = req.nextUrl.searchParams.get('id')?.trim();
   if (!id) {

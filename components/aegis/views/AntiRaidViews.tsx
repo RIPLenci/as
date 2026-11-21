@@ -189,13 +189,13 @@ export function AntiRaidViews({
         ? `/api/guilds/${activeGuildId}/antiraid/disable`
         : `/api/guilds/${activeGuildId}/antiraid/enable`;
       const res = await aegisFetch(endpoint, { method: 'POST' });
-      const json = await res.json();
+      const json = await res.json().catch(() => null);
       if (!res.ok) {
         setFeedback({
           ok: false,
-          text: json.message || (isEs ? 'Error al cambiar estado de protección.' : 'Failed to toggle protection.'),
+          text: json?.message || (isEs ? 'Error al cambiar estado de protección.' : 'Failed to toggle protection.'),
         });
-      } else {
+      } else if (json) {
         setConfig(json.config);
         setGuild(json.guild);
         setFeedback({
@@ -204,6 +204,11 @@ export function AntiRaidViews({
         });
         onSyncCompleted();
       }
+    } catch {
+      setFeedback({
+        ok: false,
+        text: isEs ? 'Error de red al cambiar estado de protección.' : 'Network error while toggling protection.',
+      });
     } finally {
       setSaving(false);
     }
@@ -237,13 +242,13 @@ export function AntiRaidViews({
           deduplicateAlerts: settings?.deduplicateAlerts ?? true,
         }),
       });
-      const json = await res.json();
+      const json = await res.json().catch(() => null);
       if (!res.ok) {
         setFeedback({
           ok: false,
-          text: json.message || (isEs ? 'Error de validación' : 'Validation error'),
+          text: json?.message || (isEs ? 'Error de validación' : 'Validation error'),
         });
-      } else {
+      } else if (json) {
         setConfig(json.config);
         setSettings(json.settings);
         setFeedback({
@@ -252,6 +257,11 @@ export function AntiRaidViews({
         });
         onSyncCompleted();
       }
+    } catch {
+      setFeedback({
+        ok: false,
+        text: isEs ? 'Error de red al guardar configuración Anti-Raid.' : 'Network error saving Anti-Raid config.',
+      });
     } finally {
       setSaving(false);
     }
@@ -268,17 +278,22 @@ export function AntiRaidViews({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(antiNuke),
       });
-      const json = await res.json();
+      const json = await res.json().catch(() => null);
       if (!res.ok) {
         setFeedback({
           ok: false,
-          text: json.message || (isEs ? 'Error de validación' : 'Validation error'),
+          text: json?.message || (isEs ? 'Error de validación' : 'Validation error'),
         });
-      } else {
+      } else if (json) {
         setAntiNuke(json.config);
         setFeedback({ ok: true, text: t.common.savedConfirmed });
         onSyncCompleted();
       }
+    } catch {
+      setFeedback({
+        ok: false,
+        text: isEs ? 'Error de red al guardar configuración Anti-Nuke.' : 'Network error saving Anti-Nuke config.',
+      });
     } finally {
       setSaving(false);
     }

@@ -169,6 +169,23 @@ async function startBot() {
         });
         if (synced) updatedAny = true;
       }
+      for (const knownGuild of Object.values(state.guilds)) {
+        if (
+          knownGuild.botStatus === 'BOT_CONNECTED' &&
+          !readyClient.guilds.cache.has(knownGuild.guildId)
+        ) {
+          const synced = aegisStore.syncGuildRecord(state, knownGuild.guildId, {
+            botStatus: 'BOT_NOT_INSTALLED',
+            botPermissionsOk: false,
+            protectionEnabled: false,
+            lastSyncAt: nowIso,
+          });
+          if (state.antiRaidConfigs[knownGuild.guildId]) {
+            state.antiRaidConfigs[knownGuild.guildId].enabled = false;
+          }
+          if (synced) updatedAny = true;
+        }
+      }
       if (updatedAny) {
         await aegisStore.commitMutation('guild:list_synced');
       }

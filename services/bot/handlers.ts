@@ -163,42 +163,66 @@ export function attachAegisBotHandlers(
         const apelableLabel = activeBan.appealable === false ? 'No' : 'Sí';
 
         const evidenceAttachments: AttachmentBuilder[] = [];
+        const attachedNames: string[] = [];
+        let totalAttachBytes = 0;
+        const MAX_DM_ATTACH_BYTES = 7_500_000;
         for (const evFile of (activeBan.evidenceFiles ?? []).slice(0, 5)) {
           const safeName = path.basename(evFile.filename);
           const absPath = path.join(EVIDENCE_DIR, activeBan.id, safeName);
           if (fs.existsSync(absPath)) {
-            evidenceAttachments.push(new AttachmentBuilder(absPath, { name: safeName }));
+            const stat = fs.statSync(absPath);
+            if (totalAttachBytes + stat.size <= MAX_DM_ATTACH_BYTES) {
+              evidenceAttachments.push(new AttachmentBuilder(absPath, { name: safeName }));
+              attachedNames.push(safeName);
+              totalAttachBytes += stat.size;
+            }
           }
         }
 
-        const dmNotice = buildSimpleNoticeV2(
+        const baseDmLines = [
+          `Has sido expulsado/baneado automáticamente de **${member.guild.name}** por encontrarte registrado en el sistema Globalban de AEGIS SECURITY.`,
+          `**ID de Usuario:** ${activeBan.discordId}`,
+          `**ID de Sanción:** ${activeBan.id}`,
+          `**Motivo:** ${activeBan.reason}`,
+          `**Tiempo:** ${tiempoLabel}`,
+          `**Gravedad:** ${gravedadLabel}`,
+          `**Apelable:** ${apelableLabel}`,
+          `**Fecha de Sanción:** ${formatExactDateTime(activeBan.createdAt, 'es')}`,
+          activeBan.evidence ? `**Detalle de Evidencia:** ${activeBan.evidence}` : '',
+          attachedNames.length > 0
+            ? `**Archivos adjuntos:** ${attachedNames.length} imagen(es) de evidencia.`
+            : '',
+        ].filter(Boolean);
+
+        const dmNoticeWithMedia = buildSimpleNoticeV2(
           'AEGIS SECURITY — NOTIFICACIÓN DE GLOBALBAN',
-          [
-            `Has sido expulsado/baneado automáticamente de **${member.guild.name}** por encontrarte registrado en el sistema Globalban de AEGIS SECURITY.`,
-            `**ID de Usuario:** ${activeBan.discordId}`,
-            `**ID de Sanción:** ${activeBan.id}`,
-            `**Motivo:** ${activeBan.reason}`,
-            `**Tiempo:** ${tiempoLabel}`,
-            `**Gravedad:** ${gravedadLabel}`,
-            `**Apelable:** ${apelableLabel}`,
-            `**Fecha de Sanción:** ${formatExactDateTime(activeBan.createdAt, 'es')}`,
-            activeBan.evidence ? `**Detalle de Evidencia:** ${activeBan.evidence}` : '',
-            evidenceAttachments.length > 0
-              ? `**Archivos adjuntos:** ${evidenceAttachments.length} imagen(es) de evidencia.`
-              : '',
-          ].filter(Boolean),
-          0xef4444
+          baseDmLines,
+          0xef4444,
+          attachedNames.length > 0 ? attachedNames : undefined
         );
 
         // Step A: DM the sanctioned user BEFORE banning (Discord blocks DMs once no mutual guild remains)
         await Promise.race([
           member.user
-            .send({
-              ...dmNotice,
-              files: evidenceAttachments,
-            })
-            .catch(() => undefined),
-          new Promise((resolve) => setTimeout(resolve, 2000)),
+            .send(
+              evidenceAttachments.length > 0
+                ? { ...dmNoticeWithMedia, files: evidenceAttachments }
+                : dmNoticeWithMedia
+            )
+            .catch(async () => {
+              if (evidenceAttachments.length > 0) {
+                await member.user
+                  .send(
+                    buildSimpleNoticeV2(
+                      'AEGIS SECURITY — NOTIFICACIÓN DE GLOBALBAN',
+                      baseDmLines,
+                      0xef4444
+                    )
+                  )
+                  .catch(() => undefined);
+              }
+            }),
+          new Promise((resolve) => setTimeout(resolve, 2500)),
         ]);
 
         // Step B: Ban user immediately from this server
@@ -1672,6 +1696,7 @@ export async function handleSlashCommand(interaction: ChatInputCommandInteractio
 
   if (interaction.commandName === 'bloqueo' || interaction.commandName === 'lockdown') {
     const lockdown = state.lockdowns[guildId];
+    let syncWarning = '';
     if (sub === 'activar' || sub === 'activate') {
       const reason =
         interaction.options.getString('motivo') ??
@@ -1694,9 +1719,12 @@ export async function handleSlashCommand(interaction: ChatInputCommandInteractio
       lockdown.scheduledEndAt = new Date(Date.now() + minutes * 60_000).toISOString();
       lockdown.affectedChannelCount = syncResult.affectedChannelCount;
       lockdown.snapshots = syncResult.snapshots;
+      if (syncResult.failedChannelCount > 0) {
+        syncWarning = `**Advertencia:** ${syncResult.failedChannelCount} canal(es) no pudieron modificarse por falta de permisos del bot.`;
+      }
       await aegisStore.commitMutation('lockdown:activated', guildId);
     } else if (sub === 'desactivar' || sub === 'deactivate') {
-      await enforceDiscordLockdown({
+      const syncResult = await enforceDiscordLockdown({
         guildId,
         active: false,
         reason: 'AEGIS Bloqueo Restaurado',
@@ -1708,6 +1736,11 @@ export async function handleSlashCommand(interaction: ChatInputCommandInteractio
       lockdown.scheduledEndAt = null;
       lockdown.snapshots = [];
       lockdown.affectedChannelCount = 0;
+      if (syncResult.failedChannelCount > 0) {
+        syncWarning = `**Advertencia:** ${syncResult.failedChannelCount} canal(es) no pudieron restaurarse por falta de permisos del bot.`;
+      } else if (syncResult.affectedChannelCount > 0) {
+        syncWarning = `**Canales Restaurados:** ${syncResult.affectedChannelCount}`;
+      }
       await aegisStore.commitMutation('lockdown:deactivated', guildId);
     } else if (sub === 'configurar' || sub === 'config') {
       const lockSend =
@@ -1729,7 +1762,8 @@ export async function handleSlashCommand(interaction: ChatInputCommandInteractio
           `**Canales Bloqueados:** ${lockdown.affectedChannelCount}`,
           `**Restricciones:** Mensajes=${lockdown.restrictions.lockSendMessages ? 'DENEGADO' : 'PERMITIDO'} | Voz=${lockdown.restrictions.lockVoiceConnect ? 'DENEGADO' : 'PERMITIDO'}`,
           `**Motivo:** ${lockdown.reason || 'Ninguno'}`,
-        ],
+          syncWarning,
+        ].filter(Boolean),
         lockdown.active ? 0xef4444 : 0x10b981
       )
     );

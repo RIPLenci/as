@@ -46,7 +46,10 @@ export async function PATCH(
   const config = state.antiRaidConfigs[guildId];
   const settings = state.guildSettings[guildId];
   if (!config) {
-    return NextResponse.json({ error: 'NOT_FOUND', message: 'Guild config missing' }, { status: 404 });
+    return NextResponse.json(
+      { error: 'NOT_FOUND', message: 'Configuración del servidor no encontrada.' },
+      { status: 404 }
+    );
   }
 
   const d = parsed.data;
@@ -56,7 +59,7 @@ export async function PATCH(
       return NextResponse.json(
         {
           error: 'BOT_NOT_CONNECTED',
-          message: 'Cannot activate protection while AEGIS bot is not connected to this server.',
+          message: 'No se puede activar la protección mientras el bot de AEGIS no esté conectado en este servidor.',
         },
         { status: 409 }
       );

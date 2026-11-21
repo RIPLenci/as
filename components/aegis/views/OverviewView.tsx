@@ -125,6 +125,7 @@ export function OverviewView({
     secondaryOwner: SecondaryOwnerRecord | null;
   } | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [riskFilter, setRiskFilter] = useState<string>('ALL');
   const [page, setPage] = useState(1);
   const [visibleSeries, setVisibleSeries] = useState({
@@ -140,10 +141,24 @@ export function OverviewView({
       const qs = new URLSearchParams({ period: p });
       if (gId) qs.set('guildId', gId);
       const res = await aegisFetch(`/api/overview?${qs.toString()}`);
-      if (res.ok) {
-        const json = (await res.json()) as OverviewAnalyticsResponse;
-        setData(json);
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json) {
+        setLoadError(
+          json?.message ||
+            (isEs
+              ? 'No se pudieron cargar las métricas de seguridad.'
+              : 'Failed to load security overview metrics.')
+        );
+        return;
       }
+      setLoadError(null);
+      setData(json as OverviewAnalyticsResponse);
+    } catch {
+      setLoadError(
+        isEs
+          ? 'Error de red al cargar las métricas de seguridad.'
+          : 'Network error while loading security overview metrics.'
+      );
     } finally {
       setLoading(false);
     }
@@ -154,33 +169,58 @@ export function OverviewView({
     const qs = new URLSearchParams({ period });
     if (activeGuildId) qs.set('guildId', activeGuildId);
 
-    const overviewReq = aegisFetch(`/api/overview?${qs.toString()}`).then(async (res) => {
-      if (!res.ok || cancelled) return;
-      const json = (await res.json()) as OverviewAnalyticsResponse;
-      if (!cancelled) setData(json);
-    });
+    const overviewReq = aegisFetch(`/api/overview?${qs.toString()}`)
+      .then(async (res) => {
+        if (cancelled) return;
+        const json = await res.json().catch(() => null);
+        if (cancelled) return;
+        if (!res.ok || !json) {
+          setLoadError(
+            json?.message ||
+              (isEs
+                ? 'No se pudieron cargar las métricas de seguridad.'
+                : 'Failed to load security overview metrics.')
+          );
+          return;
+        }
+        setLoadError(null);
+        setData(json as OverviewAnalyticsResponse);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setLoadError(
+            isEs
+              ? 'Error de red al cargar las métricas de seguridad.'
+              : 'Network error while loading security overview metrics.'
+          );
+        }
+      });
 
     const guildMetaReq = activeGuildId
-      ? aegisFetch(`/api/guilds/${activeGuildId}/security-suite`).then(async (res) => {
-          if (!res.ok || cancelled) return;
-          const json = await res.json().catch(() => null);
-          if (!cancelled && json) {
-            setGuildMeta({
-              backupsCount: json.backupsCount ?? 0,
-              whitelistUsersCount: json.whitelistUsersCount ?? 0,
-              secondaryOwner: json.secondaryOwner ?? null,
-            });
-          }
-        })
+      ? aegisFetch(`/api/guilds/${activeGuildId}/security-suite`)
+          .then(async (res) => {
+            if (!res.ok || cancelled) return;
+            const json = await res.json().catch(() => null);
+            if (!cancelled && json) {
+              setGuildMeta({
+                backupsCount: json.backupsCount ?? 0,
+                whitelistUsersCount: json.whitelistUsersCount ?? 0,
+                secondaryOwner: json.secondaryOwner ?? null,
+              });
+            }
+          })
+          .catch(() => null)
       : Promise.resolve();
 
-    const serversInviteReq = aegisFetch('/api/auth/servers').then(async (res) => {
-      if (!res.ok || cancelled) return;
-      const json = await res.json().catch(() => null);
-      if (!cancelled && json?.genericInviteUrl) {
-        setGenericInviteUrl(json.genericInviteUrl);
-      }
-    });
+    const serversInviteReq = aegisFetch('/api/auth/servers')
+      .then(async (res) => {
+        if (!res.ok || cancelled) return;
+        const json = await res.json().catch(() => null);
+        if (!cancelled && json?.genericInviteUrl) {
+          setGenericInviteUrl(json.genericInviteUrl);
+        }
+      })
+      .catch(() => null);
 
     Promise.all([overviewReq, guildMetaReq, serversInviteReq]).finally(() => {
       if (!cancelled) setLoading(false);
@@ -188,7 +228,7 @@ export function OverviewView({
     return () => {
       cancelled = true;
     };
-  }, [period, activeGuildId, syncNonce]);
+  }, [period, activeGuildId, syncNonce, isEs]);
 
   const currentHour = new Date().getHours();
   const timeGreeting = isEs
@@ -420,6 +460,25 @@ export function OverviewView({
 
   return (
     <div className="space-y-6">
+      {loadError && (
+        <div
+          role="alert"
+          className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-xs font-medium text-red-600 dark:text-red-300 flex items-center justify-between gap-3"
+        >
+          <span className="inline-flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+            <span>{loadError}</span>
+          </span>
+          <button
+            type="button"
+            onClick={() => void loadOverview(period, activeGuildId)}
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-red-500/15 hover:bg-red-500/25 font-semibold cursor-pointer shrink-0"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>{isEs ? 'Reintentar' : 'Retry'}</span>
+          </button>
+        </div>
+      )}
       {/* Welcome Hero Banner */}
       <motion.div
         initial={{ opacity: 0, y: 12 }}

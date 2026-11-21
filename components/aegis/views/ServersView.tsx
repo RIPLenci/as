@@ -150,6 +150,8 @@ function ServerCard({
   const roleStyle =
     srv.roleTag === 'PROPIETARIO'
       ? 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/25'
+      : srv.roleTag === 'SEGUNDO DUEÑO'
+      ? 'bg-cyan-500/10 text-cyan-700 dark:text-cyan-300 border-cyan-500/25'
       : srv.roleTag === 'ADMINISTRADOR'
       ? 'bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border-indigo-500/25'
       : 'bg-slate-500/10 text-slate-600 dark:text-slate-300 border-slate-500/20';
@@ -217,7 +219,7 @@ function ServerCard({
           >
             {srv.roleTag === 'PROPIETARIO' ? (
               <Crown className="w-3 h-3" />
-            ) : srv.roleTag === 'ADMINISTRADOR' ? (
+            ) : srv.roleTag === 'SEGUNDO DUEÑO' || srv.roleTag === 'ADMINISTRADOR' ? (
               <Shield className="w-3 h-3" />
             ) : (
               <UserCheck className="w-3 h-3" />
@@ -248,7 +250,9 @@ function ServerCard({
         {/* Protection state line ONLY when bot is installed & user can manage */}
         {srv.canManage && (
           <div className="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-white/[0.06] text-xs">
-            <span className="text-slate-500 dark:text-slate-400">AEGIS Defense</span>
+            <span className="text-slate-500 dark:text-slate-400">
+              {language === 'es' ? 'Defensa AEGIS' : 'AEGIS Defense'}
+            </span>
             <span
               className={`inline-flex items-center gap-1.5 font-medium ${
                 srv.protectionEnabled
@@ -594,6 +598,12 @@ export function ServersView({
         );
         await loadPremiumInfo();
         onServersUpdated();
+      } catch {
+        setActionError(
+          language === 'es'
+            ? 'Error de red al actualizar el cupo Premium del servidor.'
+            : 'Network error while updating server Premium slot.'
+        );
       } finally {
         setTogglingSlotId(null);
       }

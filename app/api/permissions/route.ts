@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server';
 import { ALL_PERMISSIONS, ALL_ROLES, ROLE_PERMISSION_MATRIX } from '@/lib/aegis/rbac';
-import { requireAuthenticatedUser } from '@/lib/server/auth-guard';
+import { requireSuperOwner } from '@/lib/server/auth-guard';
 
 export async function GET() {
-  const auth = await requireAuthenticatedUser();
+  const auth = await requireSuperOwner();
   if (!auth.ok) return auth.response;
 
   return NextResponse.json({

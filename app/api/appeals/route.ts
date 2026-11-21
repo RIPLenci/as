@@ -1,16 +1,12 @@
 import crypto from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
-import { hasPermission } from '@/lib/aegis/rbac';
 import { appealCreateSchema } from '@/lib/aegis/validators';
-import { requireAuthenticatedUser, requireGlobalPermission } from '@/lib/server/auth-guard';
+import { requireSuperOwner } from '@/lib/server/auth-guard';
 import { aegisStore } from '@/lib/server/store';
 
 export async function GET() {
-  const auth = await requireAuthenticatedUser();
+  const auth = await requireSuperOwner();
   if (!auth.ok) return auth.response;
-
-  const perm = requireGlobalPermission(auth.ctx, 'globalban:read');
-  if (!perm.ok) return perm.response;
 
   return NextResponse.json({
     appeals: auth.ctx.state.appeals,
@@ -19,7 +15,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const auth = await requireAuthenticatedUser();
+  const auth = await requireSuperOwner();
   if (!auth.ok) return auth.response;
 
   const body = await req.json().catch(() => null);
@@ -33,24 +29,6 @@ export async function POST(req: NextRequest) {
 
   const d = parsed.data;
   const { state, user } = auth.ctx;
-
-  const modEntry = state.globalModerators.find(
-    (m) => m.discordId === user.discordId && m.status === 'ACTIVE'
-  );
-  const canManageAppeals = hasPermission(
-    user.globalRole,
-    'appeals:manage',
-    modEntry?.allowedActions
-  );
-  if (d.appellantDiscordId !== user.discordId && !canManageAppeals) {
-    return NextResponse.json(
-      {
-        error: 'FORBIDDEN',
-        message: 'Only Global Staff may file an appeal on behalf of another Discord user.',
-      },
-      { status: 403 }
-    );
-  }
 
   const ban = state.globalBans.find((b) => b.id === d.banId);
   if (!ban) {

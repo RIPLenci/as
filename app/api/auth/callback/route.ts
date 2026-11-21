@@ -192,14 +192,14 @@ export async function GET(req: NextRequest) {
   if (errorParam) {
     return renderPopupCloseHtml(
       false,
-      `Discord authorization cancelled (${errorParam})${errorDesc ? `: ${errorDesc}` : '.'}`
+      `Autorización de Discord cancelada (${errorParam})${errorDesc ? `: ${errorDesc}` : '.'}`
     );
   }
 
   if (!code || !stateParam) {
     return renderPopupCloseHtml(
       false,
-      'Missing OAuth2 authorization code or state parameter from Discord callback.'
+      'Falta el código de autorización OAuth2 o el parámetro state en la respuesta de Discord.'
     );
   }
 
@@ -213,7 +213,7 @@ export async function GET(req: NextRequest) {
   if (cookieState && cookieState.state !== stateParam) {
     return renderPopupCloseHtml(
       false,
-      'OAuth2 state cookie mismatch detected. Please initiate Discord login again.'
+      'Se detectó una discrepancia de estado OAuth2. Inicia sesión con Discord nuevamente.'
     );
   }
 
@@ -225,7 +225,7 @@ export async function GET(req: NextRequest) {
   ) {
     return renderPopupCloseHtml(
       false,
-      'Invalid or expired OAuth2 state token (10 minute window exceeded). Please try signing in again.'
+      'Token OAuth2 inválido o expirado (límite de 10 minutos). Vuelve a iniciar sesión.'
     );
   }
 

@@ -223,14 +223,24 @@ export function IncidentsView({
       });
       const json = await res.json().catch(() => null);
       if (!res.ok) {
-        setError(json?.issues?.[0]?.message || json?.message || 'Failed to update incident.');
+        setError(
+          json?.issues?.[0]?.message ||
+            json?.message ||
+            (language === 'es'
+              ? 'No se pudo actualizar el incidente.'
+              : 'Failed to update incident.')
+        );
         return;
       }
       if (json?.incident) setSelected(json.incident);
       setComment('');
       await loadIncidents();
     } catch {
-      setError('Network error while updating incident.');
+      setError(
+        language === 'es'
+          ? 'Error de red al actualizar el incidente.'
+          : 'Network error while updating incident.'
+      );
     } finally {
       setSaving(false);
     }
