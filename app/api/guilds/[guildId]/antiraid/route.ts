@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { antiRaidPatchSchema } from '@/lib/aegis/validators';
-import { requireAuthenticatedUser, requireGuildAuthorization } from '@/lib/server/auth-guard';
+import {
+  requireAuthenticatedUser,
+  requireGuildAuthorization,
+  verifyMutationOrigin,
+} from '@/lib/server/auth-guard';
+import { aegisLogger } from '@/lib/server/logger';
 import { aegisStore } from '@/lib/server/store';
 
 export async function GET(
@@ -26,6 +31,9 @@ export async function PATCH(
   req: NextRequest,
   context: { params: Promise<{ guildId: string }> }
 ) {
+  const originErr = verifyMutationOrigin(req);
+  if (originErr) return originErr;
+
   const auth = await requireAuthenticatedUser();
   if (!auth.ok) return auth.response;
 
@@ -52,6 +60,7 @@ export async function PATCH(
     );
   }
 
+  const correlationId = aegisLogger.createCorrelationId('cfg');
   const d = parsed.data;
   const nowIso = new Date().toISOString();
   if (d.enabled !== undefined) {
@@ -125,6 +134,7 @@ export async function PATCH(
     entityId: guildId,
     result: 'SUCCESS',
     metadata: {
+      correlationId,
       syncVersion: config.syncVersion,
       mode: config.mode,
       maxJoins: config.maxJoins,
@@ -132,9 +142,25 @@ export async function PATCH(
     },
   });
 
-  await aegisStore.commitMutation('antiraid:config_updated', guildId, {
+  const syncRes = await aegisStore.commitMutation(
+    'antiraid:config_updated',
+    guildId,
+    { syncVersion: config.syncVersion, config },
+    { correlationId }
+  );
+
+  config.syncStatus = syncRes.redisPublished
+    ? 'SYNCHRONIZED'
+    : syncRes.mongoPersisted
+    ? 'PENDING_SYNC'
+    : 'SYNC_ERROR';
+
+  aegisLogger.info('SYNC', 'Anti-Raid config updated from dashboard', {
+    guildId,
+    userId: user.discordId,
+    correlationId,
     syncVersion: config.syncVersion,
-    config,
+    meta: { mode: config.mode, enabled: config.enabled, syncRes },
   });
 
   return NextResponse.json({
@@ -142,5 +168,6 @@ export async function PATCH(
     syncVersion: config.syncVersion,
     config,
     settings: settings ?? null,
+    syncHealth: syncRes,
   });
 }

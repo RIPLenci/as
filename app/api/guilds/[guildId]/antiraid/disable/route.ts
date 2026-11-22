@@ -1,11 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuthenticatedUser, requireGuildAuthorization } from '@/lib/server/auth-guard';
+import {
+  requireAuthenticatedUser,
+  requireGuildAuthorization,
+  verifyMutationOrigin,
+} from '@/lib/server/auth-guard';
+import { aegisLogger } from '@/lib/server/logger';
 import { aegisStore } from '@/lib/server/store';
 
 export async function POST(
-  _req: NextRequest,
+  req: NextRequest,
   context: { params: Promise<{ guildId: string }> }
 ) {
+  const originErr = verifyMutationOrigin(req);
+  if (originErr) return originErr;
+
   const auth = await requireAuthenticatedUser();
   if (!auth.ok) return auth.response;
 
@@ -19,6 +27,7 @@ export async function POST(
     return NextResponse.json({ error: 'NOT_FOUND' }, { status: 404 });
   }
 
+  const correlationId = aegisLogger.createCorrelationId('dis');
   config.enabled = false;
   config.syncVersion += 1;
   config.lastSyncedAt = new Date().toISOString();
@@ -47,9 +56,27 @@ export async function POST(
     entityType: 'AntiRaidConfig',
     entityId: guildId,
     result: 'SUCCESS',
-    metadata: { syncVersion: config.syncVersion },
+    metadata: { correlationId, syncVersion: config.syncVersion },
   });
 
-  await aegisStore.commitMutation('antiraid:disabled', guildId, { config });
-  return NextResponse.json({ confirmed: true, config, guild: guard.guild });
+  const syncHealth = await aegisStore.commitMutation(
+    'antiraid:disabled',
+    guildId,
+    { config },
+    { correlationId }
+  );
+  config.syncStatus = syncHealth.redisPublished
+    ? 'SYNCHRONIZED'
+    : syncHealth.mongoPersisted
+    ? 'PENDING_SYNC'
+    : 'SYNC_ERROR';
+
+  aegisLogger.info('ANTIRAID', 'Anti-Raid disabled from dashboard', {
+    guildId,
+    userId: user.discordId,
+    correlationId,
+    syncVersion: config.syncVersion,
+  });
+
+  return NextResponse.json({ confirmed: true, config, guild: guard.guild, syncHealth });
 }

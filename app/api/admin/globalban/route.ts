@@ -7,7 +7,7 @@ import {
   isSafeSinglePathSegment,
 } from '@/lib/aegis/security-helpers';
 import type { GlobalBanEvidenceFile, GlobalBanRecord, RiskLevel } from '@/lib/aegis/types';
-import { requireSuperOwner } from '@/lib/server/auth-guard';
+import { requireSuperOwner, verifyMutationOrigin } from '@/lib/server/auth-guard';
 import { aegisStore, EVIDENCE_DIR } from '@/lib/server/store';
 
 export const dynamic = 'force-dynamic';
@@ -47,6 +47,9 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const originErr = verifyMutationOrigin(req);
+  if (originErr) return originErr;
+
   const auth = await requireSuperOwner();
   if (!auth.ok) return auth.response;
 
@@ -275,6 +278,9 @@ export async function POST(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
+  const originErr = verifyMutationOrigin(req);
+  if (originErr) return originErr;
+
   const auth = await requireSuperOwner();
   if (!auth.ok) return auth.response;
 

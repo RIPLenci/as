@@ -1,11 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuthenticatedUser, requireGuildAuthorization } from '@/lib/server/auth-guard';
+import {
+  requireAuthenticatedUser,
+  requireGuildAuthorization,
+  verifyMutationOrigin,
+} from '@/lib/server/auth-guard';
+import { aegisLogger } from '@/lib/server/logger';
 import { aegisStore } from '@/lib/server/store';
 
 export async function POST(
-  _req: NextRequest,
+  req: NextRequest,
   context: { params: Promise<{ guildId: string }> }
 ) {
+  const originErr = verifyMutationOrigin(req);
+  if (originErr) return originErr;
+
   const auth = await requireAuthenticatedUser();
   if (!auth.ok) return auth.response;
 
@@ -29,6 +37,7 @@ export async function POST(
     );
   }
 
+  const correlationId = aegisLogger.createCorrelationId('en');
   config.enabled = true;
   config.activatedAt = new Date().toISOString();
   config.syncVersion += 1;
@@ -57,9 +66,27 @@ export async function POST(
     entityType: 'AntiRaidConfig',
     entityId: guildId,
     result: 'SUCCESS',
-    metadata: { mode: config.mode, syncVersion: config.syncVersion },
+    metadata: { correlationId, mode: config.mode, syncVersion: config.syncVersion },
   });
 
-  await aegisStore.commitMutation('antiraid:enabled', guildId, { config });
-  return NextResponse.json({ confirmed: true, config, guild: guard.guild });
+  const syncHealth = await aegisStore.commitMutation(
+    'antiraid:enabled',
+    guildId,
+    { config },
+    { correlationId }
+  );
+  config.syncStatus = syncHealth.redisPublished
+    ? 'SYNCHRONIZED'
+    : syncHealth.mongoPersisted
+    ? 'PENDING_SYNC'
+    : 'SYNC_ERROR';
+
+  aegisLogger.info('ANTIRAID', 'Anti-Raid enabled from dashboard', {
+    guildId,
+    userId: user.discordId,
+    correlationId,
+    syncVersion: config.syncVersion,
+  });
+
+  return NextResponse.json({ confirmed: true, config, guild: guard.guild, syncHealth });
 }

@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { lockdownActionSchema } from '@/lib/aegis/validators';
-import { requireAuthenticatedUser, requireGuildAuthorization } from '@/lib/server/auth-guard';
+import {
+  requireAuthenticatedUser,
+  requireGuildAuthorization,
+  verifyMutationOrigin,
+} from '@/lib/server/auth-guard';
 import { enforceDiscordLockdown } from '@/lib/server/discord-api';
+import { aegisLogger } from '@/lib/server/logger';
 import { aegisStore } from '@/lib/server/store';
 
 export async function GET(
@@ -24,6 +29,9 @@ export async function POST(
   req: NextRequest,
   context: { params: Promise<{ guildId: string }> }
 ) {
+  const originErr = verifyMutationOrigin(req);
+  if (originErr) return originErr;
+
   const auth = await requireAuthenticatedUser();
   if (!auth.ok) return auth.response;
 
@@ -46,6 +54,7 @@ export async function POST(
     return NextResponse.json({ error: 'NOT_FOUND' }, { status: 404 });
   }
 
+  const correlationId = aegisLogger.createCorrelationId('lck');
   const nowIso = new Date().toISOString();
   const d = parsed.data;
 
@@ -91,6 +100,7 @@ export async function POST(
       entityId: guildId,
       result: 'SUCCESS',
       metadata: {
+        correlationId,
         mode: d.mode,
         snapshotChannels: existing.snapshots.length,
         affectedChannelCount: syncResult.affectedChannelCount,
@@ -98,7 +108,12 @@ export async function POST(
       },
     });
 
-    await aegisStore.commitMutation('lockdown:activated', guildId, { lockdown: existing });
+    const syncHealth = await aegisStore.commitMutation(
+      'lockdown:activated',
+      guildId,
+      { lockdown: existing },
+      { correlationId }
+    );
     return NextResponse.json({
       confirmed: true,
       lockdown: existing,
@@ -107,6 +122,7 @@ export async function POST(
         affectedChannelCount: syncResult.affectedChannelCount,
         failedChannelCount: syncResult.failedChannelCount,
       },
+      syncHealth,
     });
   } else {
     const syncResult = await enforceDiscordLockdown({
@@ -145,13 +161,19 @@ export async function POST(
       entityId: guildId,
       result: 'SUCCESS',
       metadata: {
+        correlationId,
         preservedManual,
         restoredChannels: syncResult.affectedChannelCount,
         syncedToDiscord: syncResult.syncedToDiscord,
       },
     });
 
-    await aegisStore.commitMutation('lockdown:deactivated', guildId, { lockdown: existing });
+    const syncHealth = await aegisStore.commitMutation(
+      'lockdown:deactivated',
+      guildId,
+      { lockdown: existing },
+      { correlationId }
+    );
     return NextResponse.json({
       confirmed: true,
       lockdown: existing,
@@ -160,6 +182,7 @@ export async function POST(
         affectedChannelCount: syncResult.affectedChannelCount,
         failedChannelCount: syncResult.failedChannelCount,
       },
+      syncHealth,
     });
   }
 }

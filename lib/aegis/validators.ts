@@ -7,7 +7,7 @@ const discordSnowflakeSchema = z
 
 export const antiRaidPatchSchema = z.object({
   enabled: z.boolean().optional(),
-  mode: z.enum(['NORMAL', 'STRICT', 'EMERGENCY']).optional(),
+  mode: z.enum(['MONITORING', 'ALERT_ONLY', 'NORMAL', 'STRICT', 'EMERGENCY']).optional(),
   sensitivity: z.enum(['LOW', 'BALANCED', 'HIGH', 'MAXIMUM']).optional(),
   maxJoins: z.number().int().min(2).max(200).optional(),
   timeWindowSeconds: z.number().int().min(2).max(300).optional(),

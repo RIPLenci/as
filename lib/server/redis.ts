@@ -1,24 +1,55 @@
 import Redis from 'ioredis';
-import type { ServiceHealthState } from '../aegis/types';
+import type {
+  BotClusterTelemetry,
+  BotShardTelemetry,
+  ServiceHealthState,
+} from '../aegis/types';
 import { getServerEnv } from './env';
+import { aegisLogger } from './logger';
 
 export interface RedisPubSubMessage {
   channel: string;
   event: string;
   guildId?: string;
+  syncVersion?: number;
+  configHash?: string;
+  correlationId?: string;
   payload: unknown;
   originProcessId?: string;
   timestamp: string;
 }
 
+export interface RedisBotHeartbeatPayload {
+  updatedAt: number;
+  instanceId?: string;
+  pid?: number;
+  tag: string;
+  id: string;
+  avatarUrl: string | null;
+  pingMs: number;
+  guildCount: number;
+  userCount: number;
+  shards?: BotShardTelemetry[];
+  cluster?: BotClusterTelemetry;
+  lastSlashSyncAt?: string | null;
+  appliedGuildSyncVersions?: Record<string, number>;
+  latencyMetrics?: {
+    antiRaidEval: { count: number; p50Ms: number; p95Ms: number; p99Ms: number; maxMs: number };
+    sanctionExec: { count: number; p50Ms: number; p95Ms: number; p99Ms: number; maxMs: number };
+  };
+}
+
 type SyncListener = (msg: RedisPubSubMessage) => void;
+type ReconnectListener = () => void;
 
 class RedisCoordinator {
   private client: Redis | null = null;
   private subscriber: Redis | null = null;
   private status: ServiceHealthState = 'UNCONFIGURED';
   private initialized = false;
+  private hasConnectedOnce = false;
   private readonly listeners = new Set<SyncListener>();
+  private readonly reconnectListeners = new Set<ReconnectListener>();
 
   async ensureConnected(): Promise<ServiceHealthState> {
     const { redisUrl } = getServerEnv();
@@ -43,16 +74,31 @@ class RedisCoordinator {
     this.initialized = true;
     try {
       this.client = new Redis(redisUrl, {
-        maxRetriesPerRequest: 1,
+        maxRetriesPerRequest: 2,
         enableOfflineQueue: false,
-        connectTimeout: 2000,
+        connectTimeout: 2500,
+        retryStrategy: (times) => Math.min(times * 400, 5000),
         lazyConnect: true,
       });
-      this.client.on('error', () => {
+
+      this.client.on('error', (err) => {
         this.status = 'DEGRADED';
+        aegisLogger.warn('REDIS', 'Redis client connection degraded', { meta: { err } });
       });
+
       this.client.on('ready', () => {
         this.status = 'CONNECTED';
+        if (this.hasConnectedOnce) {
+          aegisLogger.info('REDIS', 'Redis client reconnected; triggering recovery hooks');
+          for (const cb of this.reconnectListeners) {
+            try {
+              cb();
+            } catch (err) {
+              aegisLogger.error('REDIS', 'Reconnect hook failed', { meta: { err } });
+            }
+          }
+        }
+        this.hasConnectedOnce = true;
       });
 
       await this.client.connect();
@@ -60,28 +106,46 @@ class RedisCoordinator {
       this.status = 'CONNECTED';
 
       this.subscriber = new Redis(redisUrl, {
-        maxRetriesPerRequest: 1,
-        enableOfflineQueue: false,
-        connectTimeout: 2000,
+        maxRetriesPerRequest: null,
+        enableOfflineQueue: true,
+        connectTimeout: 2500,
+        retryStrategy: (times) => Math.min(times * 400, 5000),
         lazyConnect: true,
       });
-      this.subscriber.on('error', () => {
-        // Safe degradation when pub/sub drops
+
+      this.subscriber.on('error', (err) => {
+        aegisLogger.warn('REDIS', 'Redis subscriber error', { meta: { err } });
       });
+
+      this.subscriber.on('ready', async () => {
+        try {
+          await this.subscriber?.subscribe('aegis:sync', 'aegis:events', 'aegis:bot:control');
+          aegisLogger.info('REDIS', 'Redis Pub/Sub channels subscribed');
+        } catch (err) {
+          aegisLogger.error('REDIS', 'Failed to subscribe Redis channels', { meta: { err } });
+        }
+      });
+
       await this.subscriber.connect();
-      await this.subscriber.subscribe('aegis:sync', 'aegis:events');
+      await this.subscriber.subscribe('aegis:sync', 'aegis:events', 'aegis:bot:control');
       this.subscriber.on('message', (channel, raw) => {
         try {
           const parsed = JSON.parse(raw) as RedisPubSubMessage;
+          if (!parsed || typeof parsed.event !== 'string') return;
           for (const listener of this.listeners) {
             listener({ ...parsed, channel });
           }
-        } catch {
-          // Ignore malformed pubsub message
+        } catch (err) {
+          aegisLogger.warn('REDIS', 'Ignored malformed Redis Pub/Sub payload', {
+            meta: { channel, err },
+          });
         }
       });
-    } catch {
+    } catch (err) {
       this.status = 'DEGRADED';
+      aegisLogger.error('REDIS', 'Redis initialization failed; running in Mongo/L1 fallback mode', {
+        meta: { err },
+      });
     }
 
     return this.status;
@@ -92,16 +156,20 @@ class RedisCoordinator {
   }
 
   async publish(
-    channel: 'aegis:sync' | 'aegis:events',
+    channel: 'aegis:sync' | 'aegis:events' | 'aegis:bot:control',
     event: string,
     payload: unknown,
     guildId?: string,
-    originProcessId?: string
+    originProcessId?: string,
+    extras?: { syncVersion?: number; configHash?: string; correlationId?: string }
   ): Promise<boolean> {
     const msg: RedisPubSubMessage = {
       channel,
       event,
       guildId,
+      syncVersion: extras?.syncVersion,
+      configHash: extras?.configHash,
+      correlationId: extras?.correlationId,
       payload,
       originProcessId,
       timestamp: new Date().toISOString(),
@@ -112,16 +180,25 @@ class RedisCoordinator {
     try {
       await this.client.publish(channel, JSON.stringify(msg));
       return true;
-    } catch {
+    } catch (err) {
       this.status = 'DEGRADED';
+      aegisLogger.warn('REDIS', `Publish failed on ${channel}`, {
+        guildId,
+        correlationId: extras?.correlationId,
+        meta: { event, err },
+      });
       return false;
     }
   }
 
-  /**
-   * Atomic sliding-window counter via Redis Lua script when connected.
-   * Returns null if Redis is degraded/unconfigured so caller uses safe local fallback.
-   */
+  async publishControl(
+    action: string,
+    payload: Record<string, unknown>,
+    originProcessId?: string
+  ): Promise<boolean> {
+    return this.publish('aegis:bot:control', action, payload, undefined, originProcessId);
+  }
+
   async incrementSlidingWindow(key: string, windowSeconds: number): Promise<number | null> {
     if (!this.client || this.status !== 'CONNECTED') return null;
     const now = Date.now();
@@ -150,39 +227,66 @@ class RedisCoordinator {
     }
   }
 
-  async getBotHeartbeat(): Promise<{
-    online: boolean;
-    tag: string | null;
-    id: string | null;
-    avatarUrl: string | null;
-    pingMs: number | null;
-    guildCount: number | null;
-    userCount: number | null;
-  } | null> {
+  async acquireDistributedLock(
+    lockKey: string,
+    ownerToken: string,
+    ttlMs: number
+  ): Promise<boolean> {
+    if (!this.client || this.status !== 'CONNECTED') return true;
+    try {
+      const res = await this.client.set(lockKey, ownerToken, 'PX', ttlMs, 'NX');
+      if (res === 'OK') return true;
+      const currentOwner = await this.client.get(lockKey);
+      if (currentOwner === ownerToken) {
+        await this.client.pexpire(lockKey, ttlMs);
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
+  async releaseDistributedLock(lockKey: string, ownerToken: string): Promise<void> {
+    if (!this.client || this.status !== 'CONNECTED') return;
+    const lua = `
+      if redis.call('get', KEYS[1]) == ARGV[1] then
+        return redis.call('del', KEYS[1])
+      else
+        return 0
+      end
+    `;
+    try {
+      await this.client.eval(lua, 1, lockKey, ownerToken);
+    } catch {
+      // Ignore lock release failures on shutdown
+    }
+  }
+
+  async setBotHeartbeat(payload: RedisBotHeartbeatPayload): Promise<boolean> {
+    if (!this.client || this.status !== 'CONNECTED') return false;
+    try {
+      await this.client.set('aegis:bot:heartbeat', JSON.stringify(payload), 'EX', 45);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async getBotHeartbeat(): Promise<
+    (RedisBotHeartbeatPayload & { online: boolean }) | null
+  > {
     if (!this.client || this.status !== 'CONNECTED') return null;
     try {
       const raw = await this.client.get('aegis:bot:heartbeat');
       if (!raw) return null;
-      const parsed = JSON.parse(raw) as {
-        updatedAt: number;
-        tag: string;
-        id: string;
-        avatarUrl?: string | null;
-        pingMs: number;
-        guildCount: number;
-        userCount?: number | null;
-      };
+      const parsed = JSON.parse(raw) as RedisBotHeartbeatPayload;
       if (Date.now() - parsed.updatedAt > 45_000) {
         return null;
       }
       return {
+        ...parsed,
         online: true,
-        tag: parsed.tag,
-        id: parsed.id,
-        avatarUrl: parsed.avatarUrl ?? null,
-        pingMs: parsed.pingMs,
-        guildCount: parsed.guildCount,
-        userCount: typeof parsed.userCount === 'number' ? parsed.userCount : null,
       };
     } catch {
       return null;
@@ -194,6 +298,22 @@ class RedisCoordinator {
     return () => {
       this.listeners.delete(listener);
     };
+  }
+
+  onReconnect(listener: ReconnectListener): () => void {
+    this.reconnectListeners.add(listener);
+    return () => {
+      this.reconnectListeners.delete(listener);
+    };
+  }
+
+  async disconnect(): Promise<void> {
+    await Promise.allSettled([
+      this.subscriber?.quit(),
+      this.client?.quit(),
+    ]);
+    this.subscriber = null;
+    this.client = null;
   }
 }
 

@@ -2,7 +2,12 @@ import crypto from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { evaluateJoinRisk } from '@/lib/aegis/risk-engine';
-import { requireAuthenticatedUser, requireGuildAuthorization } from '@/lib/server/auth-guard';
+import {
+  requireAuthenticatedUser,
+  requireGuildAuthorization,
+  verifyMutationOrigin,
+} from '@/lib/server/auth-guard';
+import { aegisLogger } from '@/lib/server/logger';
 import { aegisStore } from '@/lib/server/store';
 
 const testSchema = z.object({
@@ -19,6 +24,9 @@ export async function POST(
   req: NextRequest,
   context: { params: Promise<{ guildId: string }> }
 ) {
+  const originErr = verifyMutationOrigin(req);
+  if (originErr) return originErr;
+
   const auth = await requireAuthenticatedUser();
   if (!auth.ok) return auth.response;
 
@@ -41,6 +49,7 @@ export async function POST(
     return NextResponse.json({ error: 'NOT_FOUND' }, { status: 404 });
   }
 
+  const correlationId = aegisLogger.createCorrelationId('probe');
   const input = parsed.data;
   const evaluation = evaluateJoinRisk({
     accountAgeDays: input.accountAgeDays,
@@ -54,6 +63,12 @@ export async function POST(
     mode: config.mode,
     weights: config.riskWeights,
     rules: config.riskRules,
+    enabledDetectors: {
+      suspiciousAccountDetection: config.suspiciousAccountDetection,
+      botJoinDetection: config.botJoinDetection,
+      joinPatternDetection: config.joinPatternDetection,
+      burstDetection: config.burstDetection,
+    },
   });
 
   const nowIso = new Date().toISOString();
@@ -61,11 +76,10 @@ export async function POST(
   const syntheticUsername = `probe_node_${Date.now().toString().slice(-4)}`;
 
   if (input.persistIncident && evaluation.score >= config.riskThreshold) {
-    const incidentId = `INC-${new Date().getFullYear()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
-    config.eventsProcessed += input.simulatedJoins;
-    config.attacksDetected += 1;
-    config.attacksPrevented += 1;
+    const incidentId = `PRB-${new Date().getFullYear()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 
+    // NOTE: Synthetic diagnostic probes MUST NOT inflate real eventsProcessed,
+    // attacksDetected, or attacksPrevented telemetry counters.
     aegisStore.pushIncident(state, {
       id: incidentId,
       guildId,
@@ -77,10 +91,10 @@ export async function POST(
       affectedUsername: syntheticUsername,
       responsibleUserId: syntheticDiscordId,
       responsibleUsername: syntheticUsername,
-      appliedAction: evaluation.recommendedAction,
-      status: 'MITIGATED',
+      appliedAction: 'LOG_ONLY',
+      status: 'RESOLVED',
       assignedTo: user.username,
-      evidenceSummary: `Diagnostic burst test: ${input.simulatedJoins} joins in ${config.timeWindowSeconds}s (threshold ${config.maxJoins}).`,
+      evidenceSummary: `[Diagnóstico Sintético] Simulación: ${input.simulatedJoins} ingresos en ${config.timeWindowSeconds}s (umbral ${config.maxJoins}). Acción recomendada real: ${evaluation.recommendedAction}.`,
       signals: evaluation.signals,
       comments: [],
       createdAt: nowIso,
@@ -97,8 +111,8 @@ export async function POST(
       targetUsername: syntheticUsername,
       riskScore: evaluation.score,
       riskLevel: evaluation.level,
-      actionTaken: evaluation.recommendedAction,
-      status: 'MITIGATED',
+      actionTaken: 'LOG_ONLY',
+      status: 'LOGGED',
       createdAt: nowIso,
     });
 
@@ -110,18 +124,21 @@ export async function POST(
       entityType: 'SecurityIncident',
       entityId: incidentId,
       result: 'SUCCESS',
-      metadata: { score: evaluation.score, level: evaluation.level },
+      metadata: { correlationId, score: evaluation.score, level: evaluation.level, synthetic: true },
     });
 
-    await aegisStore.commitMutation('incident:created', guildId, {
-      incidentId,
-      score: evaluation.score,
-    });
+    await aegisStore.commitMutation(
+      'incident:created',
+      guildId,
+      { incidentId, score: evaluation.score, synthetic: true },
+      { correlationId }
+    );
   }
 
   return NextResponse.json({
     evaluation,
     threshold: config.riskThreshold,
     wouldTriggerAction: evaluation.score >= config.riskThreshold,
+    syntheticProbe: true,
   });
 }

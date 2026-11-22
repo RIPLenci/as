@@ -1,6 +1,5 @@
 import { headers } from 'next/headers';
 import { isBotStaff } from '@/lib/server/auth-guard';
-import { ensureBotStarted } from '@/lib/server/bot-runner';
 import { getServerEnv, resolveCallbackUrl } from '@/lib/server/env';
 import { readSessionFromCookies } from '@/lib/server/session';
 import { aegisStore } from '@/lib/server/store';
@@ -8,9 +7,6 @@ import { aegisStore } from '@/lib/server/store';
 export async function getAegisWorkspaceInitialProps() {
   const headerStore = await headers();
   const env = getServerEnv();
-  if (env.botConfigured) {
-    ensureBotStarted();
-  }
   const expectedCallbackUrl = resolveCallbackUrl({ headers: headerStore });
   const [session, systemHealth] = await Promise.all([
     readSessionFromCookies(),

@@ -1,5 +1,5 @@
 // ==============================================================================
-// AEGIS SECURITY — L1 BOUNDED MEMORY CACHE, O(1) SLIDING WINDOWS & ALERT DEDUP
+// AEGIS SECURITY — L1 BOUNDED MEMORY CACHE, O(1) SLIDING WINDOWS & CONCURRENCY LOCKS
 // Zero memory-leak guarantees via strict maxEntries eviction + head-pointer pruning
 // ==============================================================================
 
@@ -96,6 +96,7 @@ export interface SlidingWindowRecord {
   timestamp: number;
   subjectId: string;
   usernamePatternKey?: string;
+  interArrivalMs?: number;
 }
 
 export interface BurstDetectionResult {
@@ -103,6 +104,12 @@ export interface BurstDetectionResult {
   thresholdExceeded: boolean;
   similarUsernameCount: number;
   repetitiveSubjectCount: number;
+  uniqueSubjectsInWindow: number;
+  minInterArrivalMs: number | null;
+  avgInterArrivalMs: number | null;
+  growthRateRatio: number;
+  microBurstCount: number;
+  concentrationScore: number;
 }
 
 interface WindowBucketState {
@@ -110,9 +117,12 @@ interface WindowBucketState {
   head: number;
   patternCounts: Map<string, number>;
   subjectCounts: Map<string, number>;
+  lastTimestampMs: number | null;
+  lastTouchedMs: number;
 }
 
 const MAX_RECORDS_PER_BUCKET = 5000;
+const MAX_BUCKETS = 4000;
 
 function decrementCount(map: Map<string, number>, key: string): void {
   const prev = map.get(key);
@@ -144,7 +154,8 @@ function normalizePatternFast(username: string): string {
 
 /**
  * Amortized O(1) deterministic Sliding Window tracker for join bursts & anti-nuke actions.
- * Uses a head-indexed ring queue + O(1) frequency maps to eliminate array reallocation under floods.
+ * Tracks join volume, inter-arrival timing, unique subjects, micro-burst concentration,
+ * and growth velocity with bounded memory and zero array churn.
  */
 export class SlidingWindowTracker {
   private readonly buckets = new Map<string, WindowBucketState>();
@@ -162,7 +173,6 @@ export class SlidingWindowTracker {
       head += 1;
     }
 
-    // Enforce bounded capacity of MAX_RECORDS_PER_BUCKET active entries
     const excess = records.length - head - MAX_RECORDS_PER_BUCKET;
     if (excess > 0) {
       const stop = head + excess;
@@ -178,10 +188,20 @@ export class SlidingWindowTracker {
 
     bucket.head = head;
 
-    // Periodic compaction only when consumed prefix is large enough
     if (head >= 128 && head * 2 >= records.length) {
       bucket.records = records.slice(head);
       bucket.head = 0;
+    }
+  }
+
+  private evictStaleBucketsIfNeeded(nowMs: number): void {
+    if (this.buckets.size < MAX_BUCKETS) return;
+    const staleThreshold = nowMs - 300_000;
+    for (const [key, b] of this.buckets.entries()) {
+      if (b.lastTouchedMs < staleThreshold || b.records.length - b.head <= 0) {
+        this.buckets.delete(key);
+      }
+      if (this.buckets.size < MAX_BUCKETS * 0.8) break;
     }
   }
 
@@ -193,23 +213,27 @@ export class SlidingWindowTracker {
     username?: string,
     nowMs = Date.now()
   ): BurstDetectionResult {
-    const cutoff = nowMs - windowSeconds * 1000;
+    const safeWindowSec = Math.max(1, windowSeconds);
+    const cutoff = nowMs - safeWindowSec * 1000;
     let bucket = this.buckets.get(bucketKey);
     if (!bucket) {
+      this.evictStaleBucketsIfNeeded(nowMs);
       bucket = {
         records: [],
         head: 0,
         patternCounts: new Map(),
         subjectCounts: new Map(),
+        lastTimestampMs: null,
+        lastTouchedMs: nowMs,
       };
       this.buckets.set(bucketKey, bucket);
     } else {
       this.pruneBucket(bucket, cutoff);
+      bucket.lastTouchedMs = nowMs;
     }
 
     const normalizedPattern = username ? normalizePatternFast(username) : undefined;
 
-    // Make room if bucket is already at MAX_RECORDS_PER_BUCKET before pushing
     if (bucket.records.length - bucket.head >= MAX_RECORDS_PER_BUCKET) {
       const evicted = bucket.records[bucket.head];
       decrementCount(bucket.subjectCounts, evicted.subjectId);
@@ -219,10 +243,15 @@ export class SlidingWindowTracker {
       bucket.head += 1;
     }
 
+    const interArrivalMs =
+      bucket.lastTimestampMs !== null ? Math.max(0, nowMs - bucket.lastTimestampMs) : undefined;
+    bucket.lastTimestampMs = nowMs;
+
     bucket.records.push({
       timestamp: nowMs,
       subjectId,
       usernamePatternKey: normalizedPattern,
+      interArrivalMs,
     });
     bucket.subjectCounts.set(subjectId, (bucket.subjectCounts.get(subjectId) ?? 0) + 1);
     if (normalizedPattern) {
@@ -237,12 +266,63 @@ export class SlidingWindowTracker {
       ? bucket.patternCounts.get(normalizedPattern) ?? 0
       : 0;
     const repetitiveSubjectCount = Math.max(0, (bucket.subjectCounts.get(subjectId) ?? 1) - 1);
+    const uniqueSubjectsInWindow = bucket.subjectCounts.size;
+
+    // Sample bounded tail (up to 64 recent entries) in O(1) for micro-burst & velocity metrics
+    const microWindowMs = Math.max(1500, Math.floor((safeWindowSec * 1000) / 3));
+    const microCutoff = nowMs - microWindowMs;
+    const halfCutoff = nowMs - Math.floor((safeWindowSec * 1000) / 2);
+
+    let microBurstCount = 0;
+    let recentHalf = 0;
+    let earlierHalf = 0;
+    let minInterArrival: number | null = null;
+    let interSum = 0;
+    let interSamples = 0;
+
+    const scanStart = Math.max(bucket.head, bucket.records.length - 64);
+    for (let i = bucket.records.length - 1; i >= scanStart; i--) {
+      const rec = bucket.records[i];
+      if (rec.timestamp >= microCutoff) microBurstCount += 1;
+      if (rec.timestamp >= halfCutoff) recentHalf += 1;
+      else earlierHalf += 1;
+      if (rec.interArrivalMs !== undefined) {
+        interSum += rec.interArrivalMs;
+        interSamples += 1;
+        if (minInterArrival === null || rec.interArrivalMs < minInterArrival) {
+          minInterArrival = rec.interArrivalMs;
+        }
+      }
+    }
+
+    const scaledFactor = countInWindow > 64 ? countInWindow / (bucket.records.length - scanStart) : 1;
+    const estimatedMicroBurst = Math.round(microBurstCount * scaledFactor);
+    const avgInterArrivalMs =
+      interSamples > 0 ? Math.round(interSum / interSamples) : null;
+    const growthRateRatio =
+      earlierHalf === 0
+        ? recentHalf > 1
+          ? Number(recentHalf.toFixed(2))
+          : 1
+        : Number((recentHalf / earlierHalf).toFixed(2));
+
+    const microShare = countInWindow > 0 ? Math.min(1, estimatedMicroBurst / countInWindow) : 0;
+    const fastArrivalBonus =
+      avgInterArrivalMs !== null && avgInterArrivalMs <= 800 && countInWindow >= 3 ? 0.35 : 0;
+    const concentrationScore =
+      countInWindow <= 1 ? 0 : Number(Math.min(1, microShare * 0.65 + fastArrivalBonus).toFixed(2));
 
     return {
       countInWindow,
       thresholdExceeded: countInWindow >= threshold,
       similarUsernameCount,
       repetitiveSubjectCount,
+      uniqueSubjectsInWindow,
+      minInterArrivalMs: minInterArrival,
+      avgInterArrivalMs,
+      growthRateRatio,
+      microBurstCount: estimatedMicroBurst,
+      concentrationScore,
     };
   }
 
@@ -261,6 +341,34 @@ export class SlidingWindowTracker {
 
   clearBucket(bucketKey: string): void {
     this.buckets.delete(bucketKey);
+  }
+}
+
+/**
+ * Serializes async execution per key (e.g. per guildId) so concurrent GuildMemberAdd bursts
+ * update sliding windows and counters deterministically without blocking unrelated guilds.
+ */
+export class KeyedAsyncMutex {
+  private readonly tails = new Map<string, Promise<void>>();
+
+  async runExclusive<T>(key: string, task: () => Promise<T>): Promise<T> {
+    const previous = this.tails.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const next = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const chained = previous.then(() => next, () => next);
+    this.tails.set(key, chained);
+
+    await previous.catch(() => undefined);
+    try {
+      return await task();
+    } finally {
+      release();
+      if (this.tails.get(key) === chained) {
+        this.tails.delete(key);
+      }
+    }
   }
 }
 

@@ -1,0 +1,1153 @@
+# AEGIS SECURITY — MEGAPROMPT DE REPARACIÓN, REFACTORIZACIÓN Y OPTIMIZACIÓN AVANZADA
+
+## 1. CONTEXTO GENERAL Y OBJETIVO
+
+Ya existe un proyecto completamente desarrollado llamado **AEGIS SECURITY**, creado anteriormente mediante Google AI Studio y alojado en GitHub.
+
+Repositorio oficial:
+https://github.com/RIPLenci/as
+
+IMPORTANTE: NO QUIERO QUE CREES OTRO PROYECTO, NO QUIERO QUE REEMPLACES LA APLICACIÓN ACTUAL Y NO QUIERO QUE RECONSTRUYAS TODO DESDE CERO.
+
+Quiero que trabajes sobre el código fuente existente, inspecciones todos sus archivos y soluciones los problemas reales de implementación, funcionamiento, arquitectura, seguridad, rendimiento y mantenimiento.
+
+El proyecto ya tiene:
+- Dashboard web.
+- Sistema de autenticación.
+- Integración con Discord.
+- Discord Bot.
+- API.
+- Sistema Anti-Raid.
+- Sistemas de seguridad.
+- Persistencia de datos.
+- MongoDB.
+- Redis.
+- Worker independiente.
+- Sistema de configuración.
+- Métricas y registros.
+
+Tu misión es mejorar y reparar toda esta infraestructura sin destruir las funcionalidades que ya existen.
+
+No quiero una propuesta teórica. Quiero modificaciones reales en el código fuente.
+
+Trabajá como un equipo compuesto por:
+
+- Principal Software Architect.
+- Senior TypeScript Engineer.
+- Senior Rust Engineer.
+- Discord Security Engineer.
+- Cybersecurity Engineer.
+- Backend Infrastructure Engineer.
+- Database Engineer.
+- DevOps Engineer.
+- QA Automation Engineer.
+- Performance Engineer.
+
+La calidad final debe ser comparable con la de un producto profesional de seguridad que pueda operar en múltiples servidores de Discord.
+
+---
+
+# 2. REGLAS OBLIGATORIAS ANTES DE MODIFICAR EL CÓDIGO
+
+Antes de tocar cualquier archivo:
+
+1. Inspeccioná todo el repositorio.
+2. Analizá la estructura completa de carpetas.
+3. Leé los archivos package.json, archivos de configuración, esquemas de MongoDB, handlers, servicios, middlewares, controladores y sistemas de seguridad.
+4. Identificá todos los puntos de entrada de la aplicación.
+5. Identificá las dependencias entre el Dashboard, API, Discord Bot, Worker, Redis y MongoDB.
+6. Detectá módulos duplicados, lógica repetida, dependencias innecesarias y código muerto.
+7. Identificá errores de ejecución, incompatibilidades, errores de tipos y problemas de configuración.
+8. Revisá las pruebas existentes y determiná qué funcionalidades no están cubiertas.
+
+No supongas que un archivo funciona solamente porque existe.
+
+No inventes implementaciones, endpoints, variables de entorno ni funcionalidades que no estén presentes.
+
+Cuando encuentres un problema, rastreá su origen y corregí la causa real.
+
+### Protección del proyecto
+
+- Conservá las funcionalidades existentes.
+- Conservá los contratos de las API siempre que sea posible.
+- No elimines componentes visuales sin una razón técnica.
+- No cambies innecesariamente el diseño del dashboard.
+- No elimines colecciones ni datos de MongoDB.
+- No borres configuraciones existentes.
+- No reemplaces dependencias sin comprobar compatibilidad.
+- No dupliques servicios.
+- No generes archivos vacíos para aparentar que una implementación está terminada.
+- No dejes funciones importantes como TODO, placeholders o simulaciones.
+- Nunca muestres información de secretos en los logs.
+- No subas tokens, contraseñas ni archivos .env al repositorio.
+
+Antes de hacer una modificación estructural importante, conservá una referencia del estado inicial y procurá trabajar en una rama de reparación separada.
+
+---
+
+# 3. PRIORIDAD MÁXIMA: REPARACIÓN COMPLETA DEL ANTI-RAID
+
+El sistema Anti-Raid es la funcionalidad que requiere mayor atención.
+
+Actualmente existen indicios de problemas en la sincronización, evaluación de eventos, activación de funcionalidades, ejecución de sanciones y estadísticas.
+
+No quiero que simplemente cambies algunos umbrales.
+
+Quiero que revises todo el recorrido de un evento desde que una persona ingresa a un servidor hasta que el sistema decide qué hacer.
+
+## 3.1. Revisar el flujo completo de GuildMemberAdd
+
+Inspeccioná especialmente:
+
+- services/bot/index.ts
+- services/bot/handlers.ts
+- lib/server/store.ts
+- lib/server/bot-runner.ts
+- Sistemas de detección y evaluación.
+- Sistemas de sincronización Redis.
+- Configuración de cada servidor.
+- Modelos y repositorios relacionados.
+
+El flujo esperado debe ser:
+
+1. Discord genera GuildMemberAdd.
+2. El bot recibe el evento.
+3. Identifica el servidor.
+4. Recupera la configuración vigente del servidor.
+5. Comprueba que Anti-Raid esté habilitado.
+6. Comprueba qué detectores están habilitados.
+7. Recolecta las señales disponibles del usuario y del evento.
+8. Evalúa el riesgo.
+9. Determina la respuesta correspondiente.
+10. Verifica permisos y jerarquía de roles.
+11. Ejecuta la acción.
+12. Comprueba el resultado real.
+13. Registra el evento y su resultado.
+14. Actualiza las estadísticas del dashboard.
+15. Notifica los eventos importantes cuando corresponda.
+
+Cada paso debe tener manejo de errores.
+
+No permitas que una excepción silenciosa interrumpa el flujo sin dejar información de diagnóstico.
+
+## 3.2. Corregir la sincronización de configuraciones
+
+Existe un problema potencial en la combinación de Redis Pub/Sub, store.json y procesos independientes.
+
+Se debe investigar específicamente:
+
+- Cómo publica configuraciones la API.
+- Qué información contiene el mensaje Redis.
+- Cómo se suscribe el bot.
+- Qué hace reloadFromDiskIfNewer().
+- Cómo se actualiza la configuración.
+- Qué ocurre cuando el bot y la API están en contenedores diferentes.
+
+No dependas de que dos contenedores compartan el mismo store.json local.
+
+MongoDB debe actuar como fuente de verdad para las configuraciones persistentes.
+
+Redis debe encargarse de la distribución rápida de notificaciones y la sincronización entre procesos.
+
+Implementá un mecanismo robusto:
+
+- Cada configuración debe disponer de una versión.
+- Los mensajes de Redis deben identificar el servidor afectado.
+- El consumidor debe identificar qué versión debe aplicar.
+- El bot debe recuperar la configuración vigente desde la fuente compartida.
+- Debe evitarse aplicar cambios antiguos sobre cambios recientes.
+- Las actualizaciones deben ser idempotentes.
+- Deben existir reintentos controlados.
+- Debe existir recuperación después de una desconexión de Redis.
+- Al iniciar, el bot debe cargar sus configuraciones.
+- Después de reconectarse, debe poder recuperar los cambios que perdió.
+- Debe existir un mecanismo de reconciliación periódica si las notificaciones se pierden.
+
+Considerá un patrón Outbox o un mecanismo equivalente si es necesario para evitar inconsistencias entre la persistencia y la publicación de eventos.
+
+El sistema debe funcionar correctamente cuando cada servicio se ejecuta en un contenedor diferente.
+
+## 3.3. Corregir la ejecución duplicada del Discord Bot
+
+Investigá:
+
+- services/bot/index.ts
+- lib/server/bot-runner.ts
+- ensureBotStarted()
+- getSystemHealth()
+- Todos los lugares donde se utiliza Client o client.login().
+
+Quiero una única instancia lógica de conexión Gateway para la aplicación.
+
+El servicio independiente services/bot/index.ts debe ser el propietario de la conexión con Discord.
+
+La API y el dashboard no deben iniciar otro cliente Gateway al consultar el estado del sistema.
+
+Las consultas de salud deben ser operaciones de lectura y no deben provocar el inicio de procesos secundarios.
+
+El endpoint de salud debe obtener el estado del bot a través de un mecanismo de comunicación definido.
+
+Separá claramente:
+
+- Liveness.
+- Readiness.
+- Estado de conexión con Discord.
+- Estado de MongoDB.
+- Estado de Redis.
+- Estado de sincronización.
+
+No permitas dos conexiones accidentales utilizando el mismo token.
+
+## 3.4. Corregir la activación del Anti-Raid
+
+Actualmente existen configuraciones que pueden iniciar deshabilitadas.
+
+Revisá todos los valores por defecto, la persistencia y la interfaz del dashboard.
+
+La interfaz debe mostrar claramente:
+
+- Anti-Raid habilitado.
+- Anti-Raid deshabilitado.
+- Configuración pendiente de sincronización.
+- Protección activa.
+- Protección con errores.
+- Bot desconectado.
+- Permisos insuficientes.
+
+Nunca informes que una protección está funcionando cuando no se ha comprobado su ejecución.
+
+No habilites automáticamente protecciones en servidores existentes sin respetar la configuración elegida por sus administradores.
+
+En una instalación nueva, mostrale al usuario un proceso claro para configurar y activar la protección.
+
+## 3.5. Conectar correctamente todos los detectores
+
+Revisá individualmente los controles:
+
+- burstDetection
+- joinPatternDetection
+- suspiciousAccountDetection
+
+Verificá si realmente intervienen en la evaluación del riesgo.
+
+Cada opción del dashboard debe producir un cambio real de comportamiento.
+
+Cuando un administrador desactive una detección, esa detección no debe continuar influyendo en la puntuación.
+
+Cuando la active, debe ejecutar su lógica correspondiente.
+
+La interfaz no puede contener interruptores decorativos.
+
+Cada configuración debe estar vinculada con:
+
+1. Esquema de configuración.
+2. Valor persistente.
+3. Validación.
+4. Evaluador.
+5. Handler.
+6. Prueba automatizada.
+
+---
+
+# 4. CONSTRUIR UN MOTOR ANTI-RAID MÁS ROBUSTO
+
+Quiero que mejores la lógica de detección utilizando señales independientes y combinables.
+
+## 4.1. Detección de ráfagas
+
+Implementá un sistema de ventanas temporales deslizantes por servidor.
+
+Debe medir:
+
+- Cantidad de ingresos.
+- Tiempo entre ingresos.
+- Cantidad de usuarios por ventana.
+- Velocidad de crecimiento de los ingresos.
+- Cambios repentinos en la actividad.
+- Concentración de ingresos en períodos pequeños.
+
+Las ventanas deben ser configurables.
+
+La implementación debe ser eficiente y evitar crear estructuras que crezcan indefinidamente.
+
+Debe controlar la concurrencia entre eventos simultáneos.
+
+## 4.2. Detección de patrones coordinados
+
+Implementá un evaluador que pueda identificar comportamientos anormales mediante señales disponibles.
+
+Algunos ejemplos:
+
+- Ingresos masivos en un período reducido.
+- Grupos de cuentas creadas recientemente.
+- Patrones temporales repetitivos.
+- Actividad anormal concentrada.
+- Coincidencia de varias señales independientes.
+
+No consideres automáticamente maliciosa a una cuenta por tener determinada característica.
+
+## 4.3. Detección de cuentas sospechosas
+
+Evaluá señales como:
+
+- Antigüedad de la cuenta.
+- Características de la cuenta disponibles a través de Discord.
+- Información pública del perfil.
+- Comportamiento de ingreso.
+- Coincidencia con patrones anormales.
+
+Importante: no utilices Boolean(user.user.avatar) como criterio suficiente para identificar una cuenta sospechosa.
+
+Una imagen de perfil predeterminada no significa que una cuenta sea maliciosa.
+
+Los datos no disponibles deben considerarse desconocidos, no señales negativas.
+
+## 4.4. Risk Engine
+
+Creá o refactorizá un motor central de evaluación de riesgos.
+
+Debe recibir señales y devolver:
+
+- Risk score.
+- Nivel de riesgo.
+- Señales detectadas.
+- Explicación de la decisión.
+- Acción recomendada.
+- Identificador del servidor.
+- Identificador del usuario.
+- Momento de evaluación.
+
+Utilizá una arquitectura modular.
+
+Cada detector debe ser independiente y testeable.
+
+Los umbrales y pesos deben configurarse de manera centralizada y validada.
+
+Evitá decisiones impredecibles y falsos positivos.
+
+Implementá niveles de riesgo:
+
+- Bajo.
+- Moderado.
+- Alto.
+- Crítico.
+
+El sistema debe poder explicar por qué considera sospechoso un ingreso.
+
+## 4.5. Modos de protección
+
+Implementá o corregí los siguientes modos:
+
+- Monitoring: únicamente observa.
+- Alert: registra y notifica.
+- Moderate: aplica medidas moderadas.
+- Aggressive: aplica medidas más estrictas según las reglas configuradas.
+
+No permitas que un modo agresivo aplique sanciones sin comprobar previamente los permisos y las condiciones de seguridad.
+
+---
+
+# 5. SOLUCIONAR LAS SANCIONES Y LOS ERRORES DE DISCORD
+
+Revisá todas las funciones relacionadas con:
+
+- ban()
+- kick()
+- timeout()
+- Gestión de miembros.
+- Eliminación de mensajes.
+- Gestión de roles.
+- Registro de sanciones.
+
+Actualmente existen indicios de llamadas con errores descartados mediante catch(() => undefined).
+
+Eliminá este comportamiento cuando oculte fallos importantes.
+
+Quiero un sistema de ejecución de acciones confiable.
+
+Cada acción debe tener estados definidos:
+
+- PENDING.
+- EXECUTING.
+- SUCCESS.
+- FAILED.
+- CANCELLED.
+
+No cuentes una sanción como exitosa hasta comprobar que Discord la aceptó.
+
+No incrementes attacksPrevented cuando una operación haya fallado.
+
+Registrá:
+
+- Acción solicitada.
+- Acción ejecutada.
+- Usuario afectado.
+- Servidor.
+- Motivo.
+- Resultado.
+- Error real de Discord, cuando exista.
+- Código de error.
+- Momento de ejecución.
+
+Comprobá:
+
+- BanMembers.
+- KickMembers.
+- ModerateMembers.
+- ManageRoles.
+- ManageGuild cuando corresponda.
+- Jerarquía de roles.
+- Límites de la API.
+- Restricciones del propietario del servidor.
+
+Si el bot no tiene permisos suficientes, debe informar exactamente qué falta.
+
+Implementá reintentos solamente para errores transitorios y respetando los límites de Discord.
+
+No repitas operaciones que puedan producir sanciones duplicadas.
+
+---
+
+# 6. MEJORAR LA SEGURIDAD DEL DISCORD BOT
+
+Revisá el proceso de inicialización y configuración de Discord.
+
+Comprobá que los intents necesarios estén configurados tanto en el código como en Discord Developer Portal.
+
+Revisá especialmente Guilds y GuildMembers, y cualquier otro intent privilegiado requerido por funcionalidades existentes.
+
+Implementá validación del estado inicial:
+
+- Token válido.
+- Conexión Gateway.
+- Intents disponibles.
+- Permisos por servidor.
+- Jerarquía de roles.
+- Conexión con MongoDB.
+- Conexión con Redis.
+- Carga de configuraciones.
+
+No marques el bot como completamente operativo cuando alguno de sus componentes críticos esté fallando.
+
+Los permisos pueden cambiar después del inicio, por lo tanto también deben verificarse cuando sea necesario ejecutar una acción.
+
+---
+
+# 7. ESTADÍSTICAS Y TELEMETRÍA REALES
+
+Quiero que el dashboard muestre información verdadera.
+
+Revisá:
+
+- attacksPrevented.
+- Detecciones.
+- Ingresos.
+- Sanciones.
+- Amenazas.
+- Errores.
+- Tiempo de respuesta.
+- Estado del bot.
+- Actividad de cada servidor.
+
+Separá:
+
+- Amenazas detectadas.
+- Amenazas investigadas.
+- Acciones intentadas.
+- Acciones ejecutadas correctamente.
+- Acciones fallidas.
+- Acciones canceladas.
+
+Nunca generes estadísticas falsas.
+
+No utilices números de ejemplo como si fueran datos reales.
+
+Cuando una métrica no esté disponible, mostrá que no hay información suficiente.
+
+Implementá registros estructurados con identificadores de correlación para poder seguir un evento desde Discord hasta MongoDB y el dashboard.
+
+Incluí métricas de latencia p50, p95 y p99, uso de memoria, CPU y cantidad de eventos procesados cuando puedan medirse correctamente.
+
+---
+
+# 8. REFACTORIZACIÓN DE LA ESTRUCTURA DEL REPOSITORIO
+
+La lógica actual tiene archivos demasiado grandes y responsabilidades mezcladas.
+
+Prestá especial atención a:
+
+- services/bot/handlers.ts
+- lib/server/store.ts
+
+No quiero un único archivo de miles de líneas que se encargue de todo.
+
+Refactorizá progresivamente.
+
+Como estructura objetivo, evaluá:
+
+apps/
+  dashboard/
+  api/
+  discord-bot/
+  worker/
+
+packages/
+  shared/
+  database/
+  cache/
+  security-core/
+  anti-raid/
+  anti-nuke/
+  global-ban/
+  moderation/
+  event-system/
+  telemetry/
+
+native/
+  aegis-rust/
+
+infrastructure/
+  docker/
+  pterodactyl/
+  deployment/
+
+tests/
+  unit/
+  integration/
+  load/
+  security/
+
+No es obligatorio reproducir exactamente esta estructura si existe una alternativa más adecuada.
+
+Lo importante es conseguir:
+
+- Separación de responsabilidades.
+- Bajo acoplamiento.
+- Código reutilizable.
+- Contratos tipados.
+- Dependencias controladas.
+- Módulos testeables.
+- Importaciones claras.
+- Menos código duplicado.
+
+No hagas un traslado masivo de archivos sin actualizar todos sus imports, dependencias y pruebas.
+
+---
+
+# 9. EVALUAR Y MIGRAR COMPONENTES A RUST
+
+Quiero aprovechar Rust donde aporte beneficios reales.
+
+NO quiero migrar todo el proyecto a Rust.
+
+TypeScript debe conservar:
+
+- Dashboard.
+- Next.js.
+- React.
+- API REST.
+- Autenticación.
+- Discord Gateway.
+- Integraciones actuales que funcionen correctamente.
+
+Evaluá la migración de estos módulos:
+
+1. Risk Engine.
+2. Fast Anti-Raid.
+3. Sliding Window Engine.
+4. Pattern Detector.
+5. Procesamiento intensivo de eventos.
+
+Utilizá Rust con Tokio cuando sea necesario realizar procesamiento asíncrono y concurrente.
+
+Evaluá NAPI-RS para integrar módulos nativos directamente en Node.js.
+
+También podés evaluar un servicio Rust independiente si la separación ofrece ventajas reales.
+
+Antes de migrar cualquier módulo:
+
+- Medí el rendimiento actual en TypeScript.
+- Definí cargas de prueba representativas.
+- Medí latencia p50, p95 y p99.
+- Medí CPU y memoria.
+- Compará la implementación equivalente en Rust.
+- Medí la sobrecarga de comunicación entre lenguajes.
+- Verificá que ambas implementaciones produzcan resultados equivalentes.
+
+Si el módulo no presenta un cuello de botella demostrable, mantenelo en TypeScript.
+
+No introduzcas Rust únicamente por motivos estéticos.
+
+Toda implementación Rust debe incluir:
+
+- Gestión segura de memoria.
+- Manejo de errores.
+- Validación de entradas.
+- Tests unitarios.
+- Tests de integración.
+- Límites de recursos.
+- Manejo controlado de concurrencia.
+- Documentación de compilación.
+- Integración reproducible con el proyecto.
+
+No mantengas dos implementaciones productivas diferentes sin una estrategia clara para seleccionar una y verificar su equivalencia.
+
+---
+
+# 10. MONGO DB: INTEGRIDAD Y RENDIMIENTO
+
+Inspeccioná todos los modelos de Mongoose y las consultas de la aplicación.
+
+Revisá:
+
+- Índices.
+- Consultas repetidas.
+- Consultas N+1.
+- Validaciones.
+- Restricciones únicas.
+- Consistencia de datos.
+- Actualizaciones simultáneas.
+- Consultas innecesariamente grandes.
+- Paginación.
+- Retención de registros.
+
+No crees índices duplicados.
+
+No elimines datos existentes.
+
+Cuando sea necesario modificar esquemas, creá migraciones compatibles y documentadas.
+
+Utilizá operaciones atómicas cuando existan riesgos de concurrencia.
+
+Separá las operaciones de lectura y escritura.
+
+Asegurá que los identificadores de guild, user y demás entidades estén correctamente validados.
+
+---
+
+# 11. REDIS: ESTABILIDAD Y SINCRONIZACIÓN
+
+Revisá toda la integración con Redis.
+
+Incluí:
+
+- Conexiones independientes correctamente administradas.
+- Reconexión automática.
+- Manejo de desconexiones.
+- Suscripciones.
+- Publicaciones.
+- Caché.
+- TTL.
+- Invalidación.
+- Prevención de datos obsoletos.
+- Control de versiones.
+- Duplicación de eventos.
+- Recuperación después de reinicios.
+
+Nunca dependas exclusivamente de Redis Pub/Sub como almacenamiento permanente de configuraciones.
+
+El estado persistente debe poder recuperarse desde MongoDB.
+
+Implementá un mecanismo de reconciliación que detecte diferencias entre el estado de la base de datos y el estado utilizado por el bot.
+
+Los mensajes de sincronización deben ser validados antes de procesarse.
+
+---
+
+# 12. REVISIÓN DE DEPENDENCIAS Y CONFIGURACIÓN
+
+Inspeccioná todos los package.json, lockfiles y scripts.
+
+Existe una posible inconsistencia entre bun.lock, npm ci y la dependencia tsx.
+
+Verificá:
+
+- Gestor de paquetes utilizado.
+- Lockfile correspondiente.
+- Versiones instaladas.
+- Dependencias faltantes.
+- Dependencias no utilizadas.
+- Paquetes incompatibles.
+- Scripts de producción.
+- Scripts de desarrollo.
+- Compilación.
+- Ejecución de tests.
+
+Elegí un gestor de paquetes principal y un procedimiento coherente.
+
+Si se utiliza tsx en los scripts, debe estar correctamente declarado.
+
+No elimines paquetes sin verificar quién los importa.
+
+No actualices masivamente todas las dependencias sin evaluar los cambios incompatibles.
+
+Asegurá que una instalación limpia sea reproducible.
+
+---
+
+# 13. REVISIÓN DE API Y AUTENTICACIÓN
+
+Revisá todos los endpoints y controladores.
+
+Comprobá:
+
+- Validaciones con Zod.
+- Autenticación OAuth2 de Discord.
+- Autorización RBAC.
+- Permisos por servidor.
+- Protección de endpoints administrativos.
+- Validación de parámetros.
+- CORS.
+- CSRF cuando corresponda.
+- Rate limiting.
+- Manejo de sesiones.
+- Protección contra IDOR.
+- Exposición accidental de información.
+- Validación de webhooks.
+- Errores HTTP.
+
+Un usuario no debe poder acceder a la configuración de un servidor si no tiene autorización.
+
+Toda acción administrativa debe estar protegida tanto en la API como en la interfaz.
+
+No confíes únicamente en ocultar botones del dashboard.
+
+---
+
+# 14. MEJORAR EL WORKER
+
+El Worker debe permanecer independiente del Discord Gateway.
+
+Revisá:
+
+- Procesamiento de trabajos.
+- Expiración de sanciones.
+- Procesos periódicos.
+- Recuperación después de reinicios.
+- Idempotencia.
+- Concurrencia.
+- Manejo de errores.
+- Prevención de ejecuciones duplicadas.
+
+Los trabajos importantes deben poder recuperarse de manera segura después de una caída.
+
+No ejecutes dos veces una misma operación solamente porque el Worker se reinició.
+
+Implementá registros y estados verificables.
+
+---
+
+# 15. SISTEMA DE LOGS Y AUDITORÍA
+
+Creá o mejorá un sistema centralizado de logs.
+
+Los logs deben permitir identificar:
+
+- Errores de Discord.
+- Errores de MongoDB.
+- Errores de Redis.
+- Errores de sincronización.
+- Fallos del Anti-Raid.
+- Problemas de permisos.
+- Fallos de sanciones.
+- Excepciones.
+- Reinicios.
+- Cambios de configuración.
+
+Utilizá niveles:
+
+- DEBUG.
+- INFO.
+- WARN.
+- ERROR.
+- FATAL.
+
+Cada operación importante debe disponer de contexto suficiente para diagnosticarla.
+
+No registres tokens, contraseñas, cookies, secretos ni contenido sensible innecesario.
+
+Implementá rotación y retención de logs.
+
+---
+
+# 16. TESTING: NO DAR POR TERMINADO NADA SIN COMPROBARLO
+
+Quiero una estrategia de pruebas real.
+
+Revisá el actual core.test.ts y verificá si efectivamente prueba el motor Fast Anti-Raid.
+
+No consideres suficiente que un test simplemente compruebe que una función existe.
+
+## Tests unitarios
+
+Incluí pruebas para:
+
+- Cálculo de riesgo.
+- Detección de ráfagas.
+- Ventanas temporales.
+- Patrones coordinados.
+- Detección de cuentas sospechosas.
+- Límites y umbrales.
+- Configuración habilitada.
+- Configuración deshabilitada.
+- Permisos.
+- Ejecución de acciones.
+- Estadísticas.
+
+## Tests de integración
+
+Simulá:
+
+- Ingreso normal.
+- Ingreso de múltiples cuentas.
+- Ráfaga de ingresos.
+- Detector desactivado.
+- Anti-Raid desactivado.
+- Anti-Raid activado.
+- Bot sin permisos.
+- Discord rechazando una sanción.
+- Redis desconectado.
+- Redis reconectándose.
+- MongoDB desconectado.
+- Configuración modificada desde el dashboard.
+- Dos servicios ejecutándose en contenedores diferentes.
+
+## Tests de concurrencia
+
+Probá muchos eventos simultáneos.
+
+Comprobá que:
+
+- No se pierdan eventos.
+- No se dupliquen sanciones.
+- No se corrompa el estado.
+- Las ventanas temporales sean consistentes.
+- Las estadísticas sean correctas.
+
+## Tests de rendimiento
+
+Realizá pruebas de carga controladas.
+
+No utilices servidores reales de terceros ni ejecutes acciones destructivas.
+
+Utilizá mocks y entornos aislados.
+
+Cada prueba debe poder reproducirse.
+
+---
+
+# 17. DESPLIEGUE EN PTERODACTYL
+
+El proyecto debe seguir siendo compatible con Pterodactyl.
+
+Revisá los tres procesos:
+
+1. Dashboard/API.
+2. Discord Bot.
+3. Worker.
+
+Definí claramente qué proceso inicia cada servicio.
+
+Documentá las variables de entorno necesarias.
+
+No dupliques el bot.
+
+No dependas de compartir archivos locales entre contenedores.
+
+Comprobá los comandos de instalación y ejecución según el gestor de paquetes elegido.
+
+Prepará una configuración de despliegue reproducible y documentada.
+
+Incluí un procedimiento para:
+
+- Instalación inicial.
+- Actualización.
+- Reinicio.
+- Migraciones.
+- Comprobación de salud.
+- Recuperación ante errores.
+- Rollback.
+
+No presupongas que todos los contenedores comparten almacenamiento.
+
+---
+
+# 18. MEJORAS DEL DASHBOARD SIN DESTRUIR SU DISEÑO
+
+Conservá la identidad visual actual de AEGIS SECURITY.
+
+No reconstruyas toda la interfaz.
+
+Mejorá los estados y la precisión de la información.
+
+Cada protección debe mostrar su estado real:
+
+- Activa.
+- Desactivada.
+- Sincronizando.
+- Sin conexión.
+- Error de configuración.
+- Permisos insuficientes.
+
+Los cambios de configuración deben proporcionar confirmación real.
+
+Si una configuración no llega al bot, la interfaz debe indicarlo.
+
+No muestres una protección como activa simplemente porque el usuario presionó un botón.
+
+Incorporá, donde corresponda:
+
+- Última sincronización.
+- Último evento recibido.
+- Última ejecución del detector.
+- Última acción exitosa.
+- Errores recientes.
+- Estado de MongoDB y Redis.
+- Versión de configuración aplicada.
+
+Las métricas deben proceder del backend real.
+
+---
+
+# 19. CALIDAD DEL CÓDIGO
+
+Aplicá buenas prácticas:
+
+- TypeScript estricto.
+- Tipos compartidos.
+- Validaciones de entradas.
+- Separación de responsabilidades.
+- Funciones pequeñas.
+- Manejo de errores explícito.
+- Prevención de condiciones de carrera.
+- Limpieza de listeners.
+- Gestión correcta de conexiones.
+- Prevención de memory leaks.
+- Código reutilizable.
+- Dependencias mínimas.
+- Nombres consistentes.
+
+No utilices any innecesariamente.
+
+No utilices catch vacíos para ocultar errores.
+
+No crees abstracciones innecesarias.
+
+No dupliques validaciones ni lógica de negocio.
+
+No agregues comentarios que simplemente repitan el nombre de las funciones. Documentá únicamente aquello que requiera explicación técnica.
+
+---
+
+# 20. ORDEN OBLIGATORIO DE EJECUCIÓN
+
+Trabajá por fases.
+
+### FASE 1 — DIAGNÓSTICO
+
+Inspeccioná el proyecto y generá un inventario.
+
+Identificá cada problema con:
+
+- Archivo.
+- Ubicación.
+- Causa.
+- Impacto.
+- Prioridad.
+- Solución.
+
+No te limites a repetir los problemas de esta instrucción. Buscá también otros problemas reales.
+
+### FASE 2 — ESTABILIZACIÓN
+
+Corregí primero:
+
+1. Inicialización duplicada del bot.
+2. Sincronización MongoDB/Redis.
+3. Flujo de configuración.
+4. Evento GuildMemberAdd.
+5. Activación de detectores.
+6. Comprobación de permisos.
+7. Sanciones.
+8. Estadísticas falsas.
+9. Manejo de errores.
+
+### FASE 3 — REFACTORIZACIÓN
+
+Separá los módulos demasiado grandes.
+
+Mejorá la organización sin romper los imports ni las dependencias existentes.
+
+### FASE 4 — SEGURIDAD
+
+Auditá API, autenticación, autorización, configuraciones, persistencia y gestión de secretos.
+
+Corregí vulnerabilidades verificadas.
+
+### FASE 5 — RENDIMIENTO
+
+Medí los componentes críticos.
+
+Optimizá primero TypeScript.
+
+Evaluá Rust solamente cuando existan datos que justifiquen la migración.
+
+### FASE 6 — TESTS
+
+Implementá las pruebas unitarias, de integración, concurrencia y rendimiento.
+
+Corregí las pruebas que fallen.
+
+### FASE 7 — DESPLIEGUE
+
+Verificá la instalación, compilación y ejecución de los servicios.
+
+Actualizá la documentación.
+
+---
+
+# 21. CRITERIOS DE ACEPTACIÓN
+
+No consideres terminado el trabajo hasta verificar estos puntos:
+
+[ ] El proyecto conserva sus funcionalidades originales.
+
+[ ] Existe una sola conexión propietaria del Discord Gateway.
+
+[ ] Consultar la salud del sistema no inicia un segundo bot.
+
+[ ] El evento GuildMemberAdd se procesa correctamente.
+
+[ ] Anti-Raid funciona cuando está habilitado.
+
+[ ] Anti-Raid no ejecuta detecciones cuando está deshabilitado.
+
+[ ] Cada detector respeta su propio interruptor.
+
+[ ] Las configuraciones llegan correctamente desde el dashboard.
+
+[ ] MongoDB es la fuente de verdad persistente.
+
+[ ] Redis sincroniza correctamente los cambios.
+
+[ ] La recuperación después de desconectar Redis funciona.
+
+[ ] El bot recupera la configuración después de reiniciarse.
+
+[ ] Las comprobaciones de permisos son reales.
+
+[ ] Las sanciones se verifican.
+
+[ ] Las estadísticas solamente contabilizan resultados confirmados.
+
+[ ] Los errores quedan registrados.
+
+[ ] Los tests cubren los principales caminos del Anti-Raid.
+
+[ ] Los servicios funcionan en contenedores independientes.
+
+[ ] La instalación limpia funciona con el gestor de paquetes elegido.
+
+[ ] La compilación TypeScript funciona.
+
+[ ] Las dependencias están correctamente declaradas.
+
+[ ] No existen secretos expuestos.
+
+[ ] No existen regresiones conocidas sin documentar.
+
+[ ] La documentación de despliegue está actualizada.
+
+---
+
+# 22. REGLAS FINALES: EJECUCIÓN REAL
+
+Esta es la parte más importante.
+
+NO QUIERO QUE TERMINES ENTREGÁNDOME SOLAMENTE UN INFORME.
+
+Quiero que modifiques el proyecto existente.
+
+No respondas solamente con:
+- Qué cambiarías.
+- Qué archivos modificarías.
+- Qué tecnologías usarías.
+- Qué arquitectura recomendarías.
+
+IMPLEMENTÁ LAS SOLUCIONES.
+
+Cuando encuentres un error:
+
+1. Identificá el origen.
+2. Modificá el código.
+3. Ejecutá las pruebas disponibles.
+4. Corregí los errores derivados.
+5. Verificá que la modificación no rompa otros módulos.
+
+Trabajá de forma incremental.
+
+No afirmes que una funcionalidad funciona si no fue probada.
+
+Si Google AI Studio no dispone de una herramienta necesaria para ejecutar una operación, explicá exactamente qué quedó pendiente. No simules resultados.
+
+No detengas el trabajo después de analizar los primeros archivos.
+
+Inspeccioná todo el repositorio y continuá con las correcciones que estén dentro del alcance.
+
+Si una modificación depende de otra, resolvé primero la dependencia.
+
+No esperes una autorización adicional para realizar correcciones técnicas normales y reversibles dentro del proyecto.
+
+Sin embargo, no realices operaciones destructivas sobre datos reales, no publiques cambios automáticamente y no modifiques secretos o credenciales.
+
+---
+
+# 23. INFORME FINAL OBLIGATORIO
+
+Al terminar, entregá un informe técnico que incluya:
+
+## A. Problemas encontrados
+Todos los errores reales identificados y su causa.
+
+## B. Problemas solucionados
+Descripción de cada corrección implementada.
+
+## C. Archivos modificados
+Lista de archivos modificados, creados y eliminados, con sus respectivos motivos.
+
+## D. Anti-Raid
+Explicación del nuevo flujo de detección, evaluación, mitigación y registro.
+
+## E. Arquitectura
+Cómo quedó organizada la aplicación y cómo se comunican sus servicios.
+
+## F. Rust
+Qué módulos se migraron, cuáles quedaron en TypeScript y las mediciones que justifican las decisiones.
+
+## G. Testing
+Tests ejecutados, resultados, fallos pendientes y pruebas que no pudieron ejecutarse.
+
+## H. Seguridad
+Vulnerabilidades encontradas y medidas adoptadas.
+
+## I. Despliegue
+Pasos exactos para actualizar los contenedores de Pterodactyl.
+
+## J. Pendientes
+Todo lo que no haya sido posible implementar o verificar.
+
+No inventes resultados positivos.
+
+Si un test falla, informalo.
+
+Si no pudiste ejecutar un servicio, no declares que pasó la prueba.
+
+# RESULTADO ESPERADO
+
+Quiero transformar el AEGIS SECURITY existente en una plataforma de seguridad profesional, estable, modular, escalable y mantenible.
+
+La prioridad absoluta es conseguir un Anti-Raid funcional, confiable y verificable.
+
+Después, mejorar la arquitectura, la seguridad, el rendimiento, la sincronización, la organización y la capacidad de crecimiento.
+
+**MODIFICÁ EL PROYECTO EXISTENTE. NO CREES OTRO. NO ELIMINES FUNCIONALIDADES. NO SIMULES RESULTADOS. IMPLEMENTÁ, PROBÁ Y DOCUMENTÁ CADA CORRECCIÓN.**

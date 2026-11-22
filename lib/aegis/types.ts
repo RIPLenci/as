@@ -27,9 +27,29 @@ export type PermissionKey =
   | 'logs:read'
   | 'moderators:manage';
 
-export type ProtectionMode = 'NORMAL' | 'STRICT' | 'EMERGENCY';
+export type ProtectionMode = 'MONITORING' | 'ALERT_ONLY' | 'NORMAL' | 'STRICT' | 'EMERGENCY';
 export type RiskLevel = 'LOW' | 'MODERATE' | 'HIGH' | 'CRITICAL';
 export type AutoAction = 'LOG_ONLY' | 'ALERT' | 'QUARANTINE' | 'TIMEOUT' | 'KICK' | 'BAN';
+export type SanctionActionStatus = 'PENDING' | 'EXECUTING' | 'SUCCESS' | 'FAILED' | 'CANCELLED';
+
+export interface SanctionActionRecord {
+  id: string;
+  correlationId: string;
+  guildId: string;
+  targetUserId: string;
+  targetUsername: string;
+  requestedAction: AutoAction;
+  executedAction: string;
+  reason: string;
+  status: SanctionActionStatus;
+  missingPermissions: string[];
+  errorCode: string | number | null;
+  errorMessage: string | null;
+  attempts: number;
+  createdAt: string;
+  completedAt: string | null;
+  durationMs: number;
+}
 
 export type IncidentStatus =
   | 'OPEN'
@@ -206,6 +226,19 @@ export interface AntiRaidConfigRecord {
   eventsProcessed: number;
   attacksDetected: number;
   attacksPrevented: number;
+  threatsInvestigated?: number;
+  actionsAttempted?: number;
+  actionsSucceeded?: number;
+  actionsFailed?: number;
+  actionsCancelled?: number;
+  lastEventAt?: string | null;
+  lastDetectorRunAt?: string | null;
+  lastSuccessfulActionAt?: string | null;
+  lastErrorAt?: string | null;
+  lastErrorMessage?: string | null;
+  botPermissionsMissing?: string[];
+  syncStatus?: 'SYNCHRONIZED' | 'PENDING_SYNC' | 'SYNC_ERROR' | 'OFFLINE';
+  configHash?: string;
   syncVersion: number;
   lastSyncedAt: string;
 }
@@ -562,6 +595,24 @@ export interface SystemHealthSnapshot {
   cluster?: BotClusterTelemetry;
   slashCommands?: SlashCommandDefinition[];
   oauthConfigured: boolean;
+  syncHealth?: {
+    status: 'SYNCHRONIZED' | 'PENDING_SYNC' | 'SYNC_ERROR' | 'OFFLINE';
+    lastReconcileAt: string | null;
+    pendingOutboxCount: number;
+    appliedBotSyncVersion?: number | null;
+  };
+  latencyMetrics?: {
+    antiRaidEval: { count: number; p50Ms: number; p95Ms: number; p99Ms: number; maxMs: number };
+    sanctionExec: { count: number; p50Ms: number; p95Ms: number; p99Ms: number; maxMs: number };
+  };
+  recentErrors?: Array<{
+    id: string;
+    timestamp: string;
+    category: string;
+    message: string;
+    guildId?: string;
+    correlationId?: string;
+  }>;
 }
 
 export interface SystemSettingsRecord {

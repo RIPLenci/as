@@ -251,9 +251,19 @@ export function AntiRaidViews({
       } else if (json) {
         setConfig(json.config);
         setSettings(json.settings);
+        const pendingNotice =
+          json.syncStatus === 'PENDING_SYNC'
+            ? isEs
+              ? ' (pendiente de propagación al bot)'
+              : ' (pending bot propagation)'
+            : json.syncStatus === 'SYNC_ERROR'
+            ? isEs
+              ? ' (error de sincronización)'
+              : ' (sync error)'
+            : '';
         setFeedback({
-          ok: true,
-          text: `${t.common.savedConfirmed} (Sync v${json.syncVersion})`,
+          ok: json.syncStatus !== 'SYNC_ERROR',
+          text: `${t.common.savedConfirmed} (Sync v${json.syncVersion})${pendingNotice}`,
         });
         onSyncCompleted();
       }
@@ -435,55 +445,179 @@ export function AntiRaidViews({
             </button>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div className="p-4 rounded-2xl bg-white dark:bg-[#0F1422] border border-slate-200 dark:border-white/[0.08] space-y-1">
-              <div className="text-xs text-slate-500">
-                {isEs ? 'Estado de Protección' : 'Protection Status'}
-              </div>
-              <div
-                className={`font-mono text-lg font-bold ${
-                  config.enabled ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400'
-                }`}
-              >
-                {config.enabled ? (isEs ? 'ACTIVO' : 'ACTIVE') : isEs ? 'DESACTIVADO' : 'DISABLED'}
-              </div>
-              <div className="text-[11px] font-mono tabular-nums text-slate-500">
-                Sync v{config.syncVersion}
-              </div>
-            </div>
-            <div className="p-4 rounded-2xl bg-white dark:bg-[#0F1422] border border-slate-200 dark:border-white/[0.08] space-y-1">
-              <div className="text-xs text-slate-500">
-                {isEs ? 'Modo de Protección' : 'Protection Mode'}
-              </div>
-              <div className="font-mono text-lg font-bold text-[#5865F2]">{config.mode}</div>
-              <div className="text-[11px] font-mono text-slate-500">
-                {isEs ? 'Sensibilidad:' : 'Sensitivity:'} {config.sensitivity}
-              </div>
-            </div>
-            <div className="p-4 rounded-2xl bg-white dark:bg-[#0F1422] border border-slate-200 dark:border-white/[0.08] space-y-1">
-              <div className="text-xs text-slate-500">
-                {isEs ? 'Eventos Procesados' : 'Events Processed'}
-              </div>
-              <div className="font-mono text-lg font-bold tabular-nums text-slate-900 dark:text-white">
-                {config.eventsProcessed.toLocaleString()}
-              </div>
-              <div className="text-[11px] font-mono tabular-nums text-slate-500">
-                {isEs ? 'Ataques detectados:' : 'Attacks detected:'} {config.attacksDetected}
-              </div>
-            </div>
-            <div className="p-4 rounded-2xl bg-white dark:bg-[#0F1422] border border-slate-200 dark:border-white/[0.08] space-y-1">
-              <div className="text-xs text-slate-500">
-                {isEs ? 'Ataques Detenidos' : 'Attacks Stopped'}
-              </div>
-              <div className="font-mono text-lg font-bold tabular-nums text-emerald-600 dark:text-emerald-400">
-                {config.attacksPrevented}
-              </div>
-              <div className="text-[11px] font-mono tabular-nums text-slate-500">
-                {isEs ? 'Última sync:' : 'Last sync:'}{' '}
-                {new Date(config.lastSyncedAt).toLocaleTimeString()}
-              </div>
-            </div>
-          </div>
+          {(() => {
+            const missingPerms = config.botPermissionsMissing ?? [];
+            const botDisconnected = guild?.botStatus === 'BOT_NOT_INSTALLED';
+            const permsMissing =
+              guild?.botStatus === 'INSUFFICIENT_PERMISSIONS' ||
+              guild?.botPermissionsOk === false ||
+              missingPerms.length > 0;
+            const hasSyncError = config.syncStatus === 'SYNC_ERROR';
+            const isPendingSync = config.syncStatus === 'PENDING_SYNC';
+
+            const statusView = botDisconnected
+              ? {
+                  label: isEs ? 'BOT DESCONECTADO' : 'BOT OFFLINE',
+                  color: 'text-amber-600 dark:text-amber-400',
+                  note: isEs ? 'Bot no conectado a este servidor' : 'Bot disconnected from server',
+                }
+              : permsMissing
+              ? {
+                  label: isEs ? 'PERMISOS INSUFICIENTES' : 'MISSING PERMISSIONS',
+                  color: 'text-red-600 dark:text-red-400',
+                  note:
+                    missingPerms.length > 0
+                      ? missingPerms.join(', ')
+                      : isEs
+                      ? 'Faltan permisos en Discord'
+                      : 'Discord permissions missing',
+                }
+              : hasSyncError
+              ? {
+                  label: isEs ? 'ERROR DE SYNC' : 'SYNC ERROR',
+                  color: 'text-red-600 dark:text-red-400',
+                  note: config.lastErrorMessage || (isEs ? 'Fallo de sincronización' : 'Sync failure'),
+                }
+              : isPendingSync
+              ? {
+                  label: isEs ? 'SINCRONIZANDO' : 'PENDING SYNC',
+                  color: 'text-amber-600 dark:text-amber-400',
+                  note: `Sync v${config.syncVersion}`,
+                }
+              : !config.enabled
+              ? {
+                  label: isEs ? 'DESACTIVADO' : 'DISABLED',
+                  color: 'text-slate-400',
+                  note: `Sync v${config.syncVersion}`,
+                }
+              : {
+                  label: isEs ? 'PROTECCIÓN ACTIVA' : 'ACTIVE',
+                  color: 'text-emerald-600 dark:text-emerald-400',
+                  note: `Sync v${config.syncVersion} · ${isEs ? 'Verificado' : 'Verified'}`,
+                };
+
+            const fmtTime = (iso?: string | null) =>
+              iso ? new Date(iso).toLocaleString() : isEs ? 'Sin datos' : 'No data yet';
+
+            return (
+              <>
+                {(botDisconnected || permsMissing || config.lastErrorMessage) && (
+                  <div
+                    role="alert"
+                    className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-800 dark:text-amber-200 flex items-start gap-2.5"
+                  >
+                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+                    <div className="space-y-0.5">
+                      <div className="font-semibold">
+                        {botDisconnected
+                          ? isEs
+                            ? 'El bot AEGIS no está conectado en este servidor.'
+                            : 'AEGIS bot is not connected to this guild.'
+                          : permsMissing
+                          ? isEs
+                            ? `Permisos faltantes en Discord: ${missingPerms.join(', ') || 'Verificar rol del bot'}`
+                            : `Missing Discord permissions: ${missingPerms.join(', ') || 'Check bot role'}`
+                          : isEs
+                          ? 'Último error registrado en el motor Anti-Raid:'
+                          : 'Latest Anti-Raid engine error:'}
+                      </div>
+                      {config.lastErrorMessage && (
+                        <div className="font-mono text-[11px] opacity-90">
+                          {config.lastErrorMessage}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                  <div className="p-4 rounded-2xl bg-white dark:bg-[#0F1422] border border-slate-200 dark:border-white/[0.08] space-y-1">
+                    <div className="text-xs text-slate-500">
+                      {isEs ? 'Estado Real de Protección' : 'Live Protection State'}
+                    </div>
+                    <div className={`font-mono text-base font-bold ${statusView.color}`}>
+                      {statusView.label}
+                    </div>
+                    <div className="text-[11px] font-mono text-slate-500 truncate">
+                      {statusView.note}
+                    </div>
+                  </div>
+                  <div className="p-4 rounded-2xl bg-white dark:bg-[#0F1422] border border-slate-200 dark:border-white/[0.08] space-y-1">
+                    <div className="text-xs text-slate-500">
+                      {isEs ? 'Modo de Protección' : 'Protection Mode'}
+                    </div>
+                    <div className="font-mono text-lg font-bold text-[#5865F2]">{config.mode}</div>
+                    <div className="text-[11px] font-mono text-slate-500">
+                      {isEs ? 'Sensibilidad:' : 'Sensitivity:'} {config.sensitivity}
+                    </div>
+                  </div>
+                  <div className="p-4 rounded-2xl bg-white dark:bg-[#0F1422] border border-slate-200 dark:border-white/[0.08] space-y-1">
+                    <div className="text-xs text-slate-500">
+                      {isEs ? 'Eventos e Investigaciones' : 'Events & Threats'}
+                    </div>
+                    <div className="font-mono text-lg font-bold tabular-nums text-slate-900 dark:text-white">
+                      {config.eventsProcessed.toLocaleString()}
+                    </div>
+                    <div className="text-[11px] font-mono tabular-nums text-slate-500">
+                      {isEs ? 'Investigadas:' : 'Investigated:'} {config.threatsInvestigated ?? 0} ·{' '}
+                      {isEs ? 'Detectados:' : 'Detected:'} {config.attacksDetected}
+                    </div>
+                  </div>
+                  <div className="p-4 rounded-2xl bg-white dark:bg-[#0F1422] border border-slate-200 dark:border-white/[0.08] space-y-1">
+                    <div className="text-xs text-slate-500">
+                      {isEs ? 'Mitigaciones Confirmadas' : 'Verified Mitigations'}
+                    </div>
+                    <div className="font-mono text-lg font-bold tabular-nums text-emerald-600 dark:text-emerald-400">
+                      {config.attacksPrevented}
+                    </div>
+                    <div className="text-[11px] font-mono tabular-nums text-slate-500">
+                      {isEs ? 'Última sync:' : 'Last sync:'}{' '}
+                      {new Date(config.lastSyncedAt).toLocaleTimeString()}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 p-4 rounded-2xl bg-white dark:bg-[#0F1422] border border-slate-200 dark:border-white/[0.08] text-xs">
+                  <div>
+                    <div className="text-[11px] text-slate-500">
+                      {isEs ? 'Sanciones (Intentadas / OK)' : 'Sanctions (Attempted / OK)'}
+                    </div>
+                    <div className="font-mono tabular-nums font-semibold text-slate-900 dark:text-white mt-0.5">
+                      {config.actionsAttempted ?? 0} /{' '}
+                      <span className="text-emerald-600 dark:text-emerald-400">
+                        {config.actionsSucceeded ?? 0}
+                      </span>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] text-slate-500">
+                      {isEs ? 'Fallidas / Canceladas' : 'Failed / Cancelled'}
+                    </div>
+                    <div className="font-mono tabular-nums font-semibold text-slate-900 dark:text-white mt-0.5">
+                      <span className="text-red-500">{config.actionsFailed ?? 0}</span> /{' '}
+                      <span className="text-amber-500">{config.actionsCancelled ?? 0}</span>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] text-slate-500">
+                      {isEs ? 'Último Evento / Detector' : 'Last Event / Detector'}
+                    </div>
+                    <div className="font-mono tabular-nums text-[11px] text-slate-700 dark:text-slate-300 mt-0.5 truncate">
+                      {fmtTime(config.lastDetectorRunAt ?? config.lastEventAt)}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] text-slate-500">
+                      {isEs ? 'Última Sanción Exitosa' : 'Last Successful Sanction'}
+                    </div>
+                    <div className="font-mono tabular-nums text-[11px] text-slate-700 dark:text-slate-300 mt-0.5 truncate">
+                      {fmtTime(config.lastSuccessfulActionAt)}
+                    </div>
+                  </div>
+                </div>
+              </>
+            );
+          })()}
 
           {suite && (
             <div className="space-y-4">
@@ -638,26 +772,43 @@ export function AntiRaidViews({
                   : 'Protection Modes (Non-Indiscriminate Enforcement)'}
               </span>
             </h2>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
               {(
                 [
                   {
-                    mode: 'NORMAL' as ProtectionMode,
+                    mode: 'MONITORING' as ProtectionMode,
+                    title: isEs ? 'OBSERVACIÓN' : 'MONITORING',
                     desc: isEs
-                      ? 'Análisis estándar de ingresos, verificación de ráfagas y alertas al equipo.'
-                      : 'Standard join analysis, burst pattern checks, and staff alerts.',
+                      ? 'Solo observa y registra telemetría sin emitir alertas ni sanciones.'
+                      : 'Observe and log telemetry only without sending alerts or sanctions.',
+                  },
+                  {
+                    mode: 'ALERT_ONLY' as ProtectionMode,
+                    title: isEs ? 'SOLO ALERTA' : 'ALERT ONLY',
+                    desc: isEs
+                      ? 'Evalúa señales y notifica al canal de alertas sin aplicar castigos.'
+                      : 'Evaluate threats and notify alert channel without enforcing sanctions.',
+                  },
+                  {
+                    mode: 'NORMAL' as ProtectionMode,
+                    title: isEs ? 'MODERADO (NORMAL)' : 'NORMAL',
+                    desc: isEs
+                      ? 'Análisis estándar de ingresos, ráfagas y mitigación por riesgo.'
+                      : 'Standard join analysis, burst pattern checks, and risk mitigation.',
                   },
                   {
                     mode: 'STRICT' as ProtectionMode,
+                    title: isEs ? 'ESTRICTO' : 'STRICT',
                     desc: isEs
-                      ? 'Umbrales más estrictos, multiplicador de riesgo elevado y cuarentena automática.'
-                      : 'Tighter thresholds, elevated risk multiplier, automated quarantine on high risk.',
+                      ? 'Umbrales más estrictos y cuarentena automática en riesgo alto.'
+                      : 'Tighter thresholds and automated quarantine on high risk.',
                   },
                   {
                     mode: 'EMERGENCY' as ProtectionMode,
+                    title: isEs ? 'EMERGENCIA' : 'EMERGENCY',
                     desc: isEs
-                      ? 'Postura de defensa reforzada, auditoría prioritaria y alertas inmediatas por lotes.'
-                      : 'Reinforced raid posture, priority logging, immediate batched emergency alerts.',
+                      ? 'Postura agresiva con permisos verificados y alertas prioritarias.'
+                      : 'Aggressive posture with verified permissions and priority alerts.',
                   },
                 ] as const
               ).map((item) => (
@@ -671,10 +822,10 @@ export function AntiRaidViews({
                       : 'border-slate-200 dark:border-white/[0.08] hover:border-slate-300 dark:hover:border-slate-700'
                   }`}
                 >
-                  <div className="font-mono text-sm font-bold text-slate-900 dark:text-white">
-                    {item.mode}
+                  <div className="font-mono text-xs font-bold text-slate-900 dark:text-white">
+                    {item.title}
                   </div>
-                  <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                  <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed">
                     {item.desc}
                   </p>
                 </button>

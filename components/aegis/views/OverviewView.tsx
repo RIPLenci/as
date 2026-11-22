@@ -1001,6 +1001,44 @@ export function OverviewView({
                   {new Date(data.systemHealth.lastSynchronization).toLocaleTimeString()}
                 </span>
               </div>
+              {data.systemHealth.syncHealth && (
+                <div className="flex items-center justify-between text-[11px] font-mono tabular-nums text-slate-600 dark:text-slate-400">
+                  <span>{isEs ? 'Sincronización Outbox' : 'Outbox Sync'}</span>
+                  <span
+                    className={
+                      data.systemHealth.syncHealth.status === 'SYNCHRONIZED'
+                        ? 'text-emerald-600 dark:text-emerald-400 font-semibold'
+                        : 'text-amber-600 dark:text-amber-400 font-semibold'
+                    }
+                  >
+                    {data.systemHealth.syncHealth.status} ({data.systemHealth.syncHealth.pendingOutboxCount})
+                  </span>
+                </div>
+              )}
+              {data.systemHealth.latencyMetrics && (
+                <div className="flex items-center justify-between text-[11px] font-mono tabular-nums text-slate-600 dark:text-slate-400">
+                  <span>{isEs ? 'Latencia Anti-Raid (p50/p95)' : 'Anti-Raid Latency (p50/p95)'}</span>
+                  <span className="text-slate-800 dark:text-slate-300">
+                    {data.systemHealth.latencyMetrics.antiRaidEval.count > 0
+                      ? `${data.systemHealth.latencyMetrics.antiRaidEval.p50Ms}ms / ${data.systemHealth.latencyMetrics.antiRaidEval.p95Ms}ms`
+                      : isEs
+                      ? 'Sin muestras'
+                      : 'No samples'}
+                  </span>
+                </div>
+              )}
+              <div className="flex items-center justify-between text-[11px] font-mono tabular-nums text-slate-600 dark:text-slate-400">
+                <span>{isEs ? 'Errores Recientes' : 'Recent Errors'}</span>
+                <span
+                  className={
+                    (data.systemHealth.recentErrors?.length ?? 0) > 0
+                      ? 'text-red-500 font-semibold'
+                      : 'text-emerald-600 dark:text-emerald-400'
+                  }
+                >
+                  {data.systemHealth.recentErrors?.length ?? 0}
+                </span>
+              </div>
             </div>
           )}
         </section>

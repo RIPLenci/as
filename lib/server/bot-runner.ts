@@ -8,10 +8,12 @@ import {
   Routes,
 } from 'discord.js';
 import { planGuildCommandSyncBatches } from '../aegis/bot-slash-plan';
+import { aegisTelemetry } from '../aegis/telemetry';
 import type { BotClusterTelemetry, BotShardTelemetry } from '../aegis/types';
 import { buildAegisSlashCommands } from '../../services/bot/commands/registry';
 import { attachAegisBotHandlers } from '../../services/bot/handlers';
 import { getServerEnv } from './env';
+import { aegisLogger } from './logger';
 import { redisCoordinator } from './redis';
 
 interface BotRunnerState {
@@ -27,9 +29,11 @@ interface BotRunnerState {
   heartbeatTimer: NodeJS.Timeout | null;
   maintenanceTimer: NodeJS.Timeout | null;
   applicationId: string | null;
+  gatewayLeaseToken: string | null;
 }
 
 const globalForRunner = globalThis as unknown as { __aegisBotRunner?: BotRunnerState };
+const GATEWAY_OWNER_LOCK_KEY = 'aegis:bot:gateway_owner';
 
 function getRunnerState(): BotRunnerState {
   if (!globalForRunner.__aegisBotRunner) {
@@ -46,9 +50,17 @@ function getRunnerState(): BotRunnerState {
       heartbeatTimer: null,
       maintenanceTimer: null,
       applicationId: null,
+      gatewayLeaseToken: null,
     };
   }
   return globalForRunner.__aegisBotRunner;
+}
+
+export function isEmbeddedBotEnabled(): boolean {
+  return (
+    process.env.AEGIS_EMBEDDED_BOT === 'true' &&
+    process.env.AEGIS_STANDALONE_BOT !== 'true'
+  );
 }
 
 export async function resolveBotApplicationId(
@@ -67,7 +79,11 @@ export async function resolveBotApplicationId(
     if (!res.ok) return null;
     const app = (await res.json()) as { id?: string };
     return app.id ?? null;
-  } catch {
+  } catch (err) {
+    aegisLogger.warn('DISCORD', 'Failed resolving bot application ID from Discord REST', {
+      errorCode: 'REST_APP_ID',
+      meta: { error: err instanceof Error ? err.message : String(err) },
+    });
     return null;
   }
 }
@@ -84,7 +100,11 @@ export async function deploySlashCommandsForGuild(
       body: commands,
     });
     return true;
-  } catch {
+  } catch (err) {
+    aegisLogger.warn('DISCORD', 'Failed deploying slash commands for guild', {
+      guildId,
+      meta: { error: err instanceof Error ? err.message : String(err) },
+    });
     return false;
   }
 }
@@ -118,7 +138,8 @@ export async function deploySlashCommandsEverywhere(): Promise<{
   if (!appId) {
     return {
       ok: false,
-      error: 'No se pudo verificar el Application ID del bot con Discord REST (verifica DISCORD_BOT_TOKEN / DISCORD_CLIENT_ID).',
+      error:
+        'No se pudo verificar el Application ID del bot con Discord REST (verifica DISCORD_BOT_TOKEN / DISCORD_CLIENT_ID).',
       applicationId: null,
       commandCount: commands.length,
       globalSynced: false,
@@ -132,13 +153,11 @@ export async function deploySlashCommandsEverywhere(): Promise<{
 
   let globalError: string | undefined;
   try {
-    // Wipe legacy global application commands so commands never appear duplicated alongside per-guild scopes
     await rest.put(Routes.applicationCommands(appId), { body: [] });
   } catch (err) {
     globalError = err instanceof Error ? err.message : 'Discord REST error';
   }
 
-  // Gather live guilds from connected client OR Discord REST so every server gets immediate slash commands
   const guildIds = new Set<string>();
   if (runner.client?.isReady()) {
     for (const gId of runner.client.guilds.cache.keys()) {
@@ -154,8 +173,10 @@ export async function deploySlashCommandsEverywhere(): Promise<{
       const list = (await res.json()) as Array<{ id: string }>;
       for (const g of list) guildIds.add(g.id);
     }
-  } catch {
-    // Keep client cache list
+  } catch (err) {
+    aegisLogger.warn('DISCORD', 'REST guild discovery failed during slash deployment', {
+      meta: { error: err instanceof Error ? err.message : String(err) },
+    });
   }
 
   let guildsSynced = 0;
@@ -210,7 +231,6 @@ function buildOptimizedDiscordClient(): Client {
   return new Client({
     intents,
     shards: Number.isFinite(configuredShards) && configuredShards > 0 ? configuredShards : 'auto',
-    // Minimal bounded cache + automatic sweeping for ultra-low memory & sub-20ms gateway dispatch
     makeCache: Options.cacheWithLimits({
       ...Options.DefaultMakeCacheSettings,
       MessageManager: 32,
@@ -237,20 +257,33 @@ function buildOptimizedDiscordClient(): Client {
 
 async function publishLiveHeartbeat(client: Client): Promise<void> {
   if (!client.isReady()) return;
-  const userCount = client.guilds.cache.reduce((sum, g) => sum + (g.memberCount || 0), 0);
-  await redisCoordinator
-    .publish(
-      'aegis:events',
-      'bot:heartbeat',
-      {
+  const snap = getLiveBotRunnerSnapshot();
+  const telemetry = aegisTelemetry.getSnapshot();
+  if (redisCoordinator.getStatus() === 'CONNECTED') {
+    await redisCoordinator
+      .setBotHeartbeat({
+        updatedAt: Date.now(),
+        instanceId: `embedded-${process.pid}`,
+        pid: process.pid,
         tag: client.user.tag,
         id: client.user.id,
-        pingMs: client.ws.ping,
-        guildCount: client.guilds.cache.size,
-        userCount,
-      }
-    )
-    .catch(() => undefined);
+        avatarUrl: client.user.displayAvatarURL({ size: 256 }),
+        pingMs: snap.pingMs ?? client.ws.ping,
+        guildCount: snap.guildCount ?? client.guilds.cache.size,
+        userCount: snap.userCount ?? 0,
+        shards: snap.shards,
+        cluster: snap.cluster ?? undefined,
+        latencyMetrics: {
+          antiRaidEval: telemetry.antiRaidEvalLatency,
+          sanctionExec: telemetry.sanctionExecLatency,
+        },
+      })
+      .catch((err) => {
+        aegisLogger.warn('DISCORD', 'Failed publishing embedded bot heartbeat', {
+          meta: { error: err instanceof Error ? err.message : String(err) },
+        });
+      });
+  }
 }
 
 export async function connectOrRestartBot(forceRestart = false): Promise<{
@@ -275,6 +308,54 @@ export async function connectOrRestartBot(forceRestart = false): Promise<{
       guildCount: null,
       error: 'DISCORD_BOT_TOKEN no configurado en el servidor.',
     };
+  }
+
+  if (!isEmbeddedBotEnabled()) {
+    return {
+      ok: false,
+      ready: false,
+      tag: null,
+      id: null,
+      pingMs: null,
+      guildCount: null,
+      error:
+        'El bot Gateway está reservado al proceso standalone (services/bot/index.ts). Define AEGIS_EMBEDDED_BOT=true únicamente en entornos monolíticos de un solo contenedor.',
+    };
+  }
+
+  // Prevent competing Gateway login if a standalone container holds the heartbeat or gateway lock
+  if (env.redisConfigured) {
+    await redisCoordinator.ensureConnected();
+    const existingHeartbeat = await redisCoordinator.getBotHeartbeat();
+    if (existingHeartbeat?.online && existingHeartbeat.pid !== process.pid) {
+      return {
+        ok: false,
+        ready: false,
+        tag: existingHeartbeat.tag,
+        id: existingHeartbeat.id,
+        pingMs: existingHeartbeat.pingMs,
+        guildCount: existingHeartbeat.guildCount,
+        error: `Un proceso standalone (${existingHeartbeat.instanceId || 'bot'}) ya posee la conexión al Gateway de Discord.`,
+      };
+    }
+    const lockToken = runner.gatewayLeaseToken ?? `embedded-${process.pid}`;
+    const acquired = await redisCoordinator.acquireDistributedLock(
+      GATEWAY_OWNER_LOCK_KEY,
+      lockToken,
+      45_000
+    );
+    if (!acquired) {
+      return {
+        ok: false,
+        ready: false,
+        tag: null,
+        id: null,
+        pingMs: null,
+        guildCount: null,
+        error: 'Otro proceso posee actualmente el lock distribuido del Gateway de Discord.',
+      };
+    }
+    runner.gatewayLeaseToken = lockToken;
   }
 
   if (runner.client && !forceRestart) {
@@ -343,29 +424,46 @@ export async function connectOrRestartBot(forceRestart = false): Promise<{
           },
         ],
       });
-      console.info(
-        `[AEGIS BOT] Connected LIVE as ${readyClient.user.tag} across ${readyClient.guilds.cache.size} guilds (${readyClient.ws.shards.size} shards).`
-      );
+      aegisLogger.info('DISCORD', 'Connected LIVE in embedded mode', {
+        meta: {
+          tag: readyClient.user.tag,
+          guilds: readyClient.guilds.cache.size,
+          shards: readyClient.ws.shards.size,
+        },
+      });
       void deploySlashCommandsEverywhere().catch((err) => {
-        console.warn('[AEGIS BOT] Initial slash sync warning:', err);
+        aegisLogger.warn('DISCORD', 'Initial slash sync warning', {
+          meta: { error: err instanceof Error ? err.message : String(err) },
+        });
       });
       void publishLiveHeartbeat(readyClient);
       if (runner.heartbeatTimer) clearInterval(runner.heartbeatTimer);
       runner.heartbeatTimer = setInterval(() => {
+        if (runner.gatewayLeaseToken && redisCoordinator.getStatus() === 'CONNECTED') {
+          void redisCoordinator.acquireDistributedLock(
+            GATEWAY_OWNER_LOCK_KEY,
+            runner.gatewayLeaseToken,
+            45_000
+          );
+        }
         void publishLiveHeartbeat(readyClient);
       }, 15_000);
       if (runner.maintenanceTimer) clearInterval(runner.maintenanceTimer);
       runner.maintenanceTimer = setInterval(() => {
         void import('./store')
           .then(({ aegisStore }) => aegisStore.getState())
-          .catch(() => undefined);
+          .catch((err) => {
+            aegisLogger.warn('SYSTEM', 'Maintenance tick error', {
+              meta: { error: err instanceof Error ? err.message : String(err) },
+            });
+          });
       }, 60_000);
       resolve();
     });
 
     client.on(Events.Error, (err) => {
       runner.lastError = err.message;
-      console.error('[AEGIS BOT] Gateway error:', err.message);
+      aegisLogger.error('DISCORD', 'Gateway client error', { meta: { error: err.message } });
     });
 
     client.on(Events.ShardDisconnect, () => {
@@ -412,12 +510,15 @@ export async function connectOrRestartBot(forceRestart = false): Promise<{
 }
 
 export function ensureBotStarted(): void {
+  if (!isEmbeddedBotEnabled()) return;
   const env = getServerEnv();
   if (!env.discordBotToken) return;
   const runner = getRunnerState();
   if (runner.client || runner.connectingPromise) return;
   void connectOrRestartBot(false).catch((err) => {
-    console.warn('[AEGIS BOT] Auto-boot error:', err);
+    aegisLogger.warn('DISCORD', 'Auto-boot warning', {
+      meta: { error: err instanceof Error ? err.message : String(err) },
+    });
   });
 }
 
@@ -460,6 +561,7 @@ export function getLiveBotRunnerSnapshot(): {
     };
   }
 
+  const telemetry = aegisTelemetry.getSnapshot();
   const totalMemMb = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
   const uptimeSeconds = runner.startedAt ? Math.floor((Date.now() - runner.startedAt) / 1000) : 0;
   const guildCount = client.guilds.cache.size;
@@ -478,7 +580,7 @@ export function getLiveBotRunnerSnapshot(): {
               : client.guilds.cache.filter((g) => g.shardId === shard.id).size,
           uptimeSeconds,
           memoryMb: Math.max(12, Math.round(totalMemMb / Math.max(1, wsShards.length))),
-          eventThroughputPerSec: 0,
+          eventThroughputPerSec: telemetry.eventThroughputPerSec,
         }))
       : [
           {
@@ -489,7 +591,7 @@ export function getLiveBotRunnerSnapshot(): {
             guildCount,
             uptimeSeconds,
             memoryMb: totalMemMb,
-            eventThroughputPerSec: 0,
+            eventThroughputPerSec: telemetry.eventThroughputPerSec,
           },
         ];
 
@@ -507,10 +609,10 @@ export function getLiveBotRunnerSnapshot(): {
     mode: wsShards.length > 1 ? 'CLUSTERED_MULTI_WORKER' : 'STANDALONE_OPTIMIZED',
     workerPid: process.pid,
     memoryMb: totalMemMb,
-    cpuPercent: 0,
+    cpuPercent: telemetry.cpuPercent,
     averagePingMs: avgPing,
     status: avgPing < 120 ? 'OPTIMAL' : 'HEALTHY',
-    eventLoopLagMs: 0,
+    eventLoopLagMs: telemetry.eventLoopLagMs,
     activeSockets: wsShards.length,
     queueSize: 0,
   };

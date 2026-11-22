@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { dedupePreserveOrder } from '@/lib/aegis/security-helpers';
 import { antiNukePatchSchema } from '@/lib/aegis/validators';
-import { requireAuthenticatedUser, requireGuildAuthorization } from '@/lib/server/auth-guard';
+import {
+  requireAuthenticatedUser,
+  requireGuildAuthorization,
+  verifyMutationOrigin,
+} from '@/lib/server/auth-guard';
+import { aegisLogger } from '@/lib/server/logger';
 import { aegisStore } from '@/lib/server/store';
 
 export async function GET(
@@ -24,6 +29,9 @@ export async function PATCH(
   req: NextRequest,
   context: { params: Promise<{ guildId: string }> }
 ) {
+  const originErr = verifyMutationOrigin(req);
+  if (originErr) return originErr;
+
   const auth = await requireAuthenticatedUser();
   if (!auth.ok) return auth.response;
 
@@ -40,6 +48,7 @@ export async function PATCH(
     );
   }
 
+  const correlationId = aegisLogger.createCorrelationId('nuke');
   const { state, user } = auth.ctx;
   const existing = state.antiNukeConfigs[guildId];
   if (!existing) {
@@ -67,9 +76,18 @@ export async function PATCH(
     entityType: 'AntiNukeConfig',
     entityId: guildId,
     result: 'SUCCESS',
-    metadata: { enabled: updated.enabled, adminCount: updated.authorizedAdminIds.length },
+    metadata: {
+      correlationId,
+      enabled: updated.enabled,
+      adminCount: updated.authorizedAdminIds.length,
+    },
   });
 
-  await aegisStore.commitMutation('antinuke:config_updated', guildId, { config: updated });
-  return NextResponse.json({ confirmed: true, config: updated });
+  const syncHealth = await aegisStore.commitMutation(
+    'antinuke:config_updated',
+    guildId,
+    { config: updated },
+    { correlationId }
+  );
+  return NextResponse.json({ confirmed: true, config: updated, syncHealth });
 }

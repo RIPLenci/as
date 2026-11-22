@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPlanDisplayName, isPaidTier, normalizePlanTier } from '@/lib/aegis/premium';
 import { securitySuitePatchSchema } from '@/lib/aegis/validators';
-import { requireAuthenticatedUser, requireGuildAuthorization } from '@/lib/server/auth-guard';
+import {
+  requireAuthenticatedUser,
+  requireGuildAuthorization,
+  verifyMutationOrigin,
+} from '@/lib/server/auth-guard';
+import { aegisLogger } from '@/lib/server/logger';
 import { aegisStore } from '@/lib/server/store';
 import type { AntiRaidRuleKey } from '@/lib/aegis/types';
 
@@ -58,6 +63,9 @@ export async function PATCH(
   req: NextRequest,
   context: { params: Promise<{ guildId: string }> }
 ) {
+  const originErr = verifyMutationOrigin(req);
+  if (originErr) return originErr;
+
   const auth = await requireAuthenticatedUser();
   if (!auth.ok) return auth.response;
 
@@ -74,6 +82,7 @@ export async function PATCH(
     );
   }
 
+  const correlationId = aegisLogger.createCorrelationId('suite');
   const { state, user } = auth.ctx;
   const suite = state.guildSecuritySuites[guildId];
   const plan = state.guildPlans[guildId];
@@ -221,16 +230,23 @@ export async function PATCH(
     entityId: guildId,
     result: 'SUCCESS',
     metadata: {
+      correlationId,
       punishmentAction: suite.punishmentAction,
       autoModRulesUsed: computeAutoModRulesUsed(suite),
     },
   });
 
-  await aegisStore.commitMutation('security_suite:updated', guildId, { suite });
+  const syncHealth = await aegisStore.commitMutation(
+    'security_suite:updated',
+    guildId,
+    { suite },
+    { correlationId }
+  );
   return NextResponse.json({
     suite,
     plan,
     autoModRulesUsed: computeAutoModRulesUsed(suite),
     autoModRulesLimit: 6,
+    syncHealth,
   });
 }

@@ -69,14 +69,17 @@ export class RaidBurstShield {
 
 export interface FastJoinInput {
   guildId: string;
+  targetUserId?: string;
   accountAgeDays: number;
   isBot: boolean;
-  hasAvatar: boolean;
+  hasAvatar?: boolean | null;
   joinsInWindow: number;
   thresholdExceeded: boolean;
   similarUsernameCount: number;
   repetitiveJoinCount: number;
   underActiveRaidShield: boolean;
+  concentrationScore?: number;
+  growthRateRatio?: number;
   config: AntiRaidConfigRecord;
 }
 
@@ -89,16 +92,55 @@ export interface FastJoinDecision {
 
 /**
  * Evaluates an incoming guild member in sub-millisecond pure memory.
- * Combines Risk Engine 0-100 scoring with instant RaidBurstShield escalation
- * while preserving the young-account safeguard when no raid/pattern signals exist.
+ * - Immediately exits if master Anti-Raid is disabled (`config.enabled === false`).
+ * - Honors individual detector switches (`burstDetection`, `joinPatternDetection`,
+ *   `suspiciousAccountDetection`, `botJoinDetection`).
+ * - Never penalizes missing/default avatars.
+ * - Preserves non-punitive behavior in MONITORING and ALERT_ONLY modes.
  */
 export function evaluateFastJoinMitigation(input: FastJoinInput): FastJoinDecision {
   const { config } = input;
-  const effectiveJoins = input.underActiveRaidShield
+
+  if (!config.enabled) {
+    const disabledEval = evaluateJoinRisk({
+      guildId: input.guildId,
+      targetUserId: input.targetUserId,
+      accountAgeDays: input.accountAgeDays,
+      isBot: input.isBot,
+      hasAvatar: input.hasAvatar,
+      joinsInWindow: 0,
+      maxJoinsThreshold: config.maxJoins,
+      similarUsernameCount: 0,
+      repetitiveJoinCount: 0,
+      hasActiveGlobalBan: false,
+      mode: config.mode,
+      weights: config.riskWeights ?? DEFAULT_RISK_WEIGHTS,
+      rules: config.riskRules,
+      enabledDetectors: {
+        suspiciousAccountDetection: false,
+        botJoinDetection: false,
+        joinPatternDetection: false,
+        burstDetection: false,
+      },
+    });
+    return {
+      shouldMitigate: false,
+      action: 'LOG_ONLY',
+      evaluation: disabledEval,
+      escalatedByRaidShield: false,
+    };
+  }
+
+  const effectiveBurstActive = Boolean(config.burstDetection);
+  const effectiveThresholdExceeded = effectiveBurstActive && input.thresholdExceeded;
+  const effectiveShield = effectiveBurstActive && input.underActiveRaidShield;
+  const effectiveJoins = effectiveShield
     ? Math.max(input.joinsInWindow, config.maxJoins)
     : input.joinsInWindow;
 
   const evaluation = evaluateJoinRisk({
+    guildId: input.guildId,
+    targetUserId: input.targetUserId,
     accountAgeDays: input.accountAgeDays,
     isBot: input.isBot,
     hasAvatar: input.hasAvatar,
@@ -110,31 +152,61 @@ export function evaluateFastJoinMitigation(input: FastJoinInput): FastJoinDecisi
     mode: config.mode,
     weights: config.riskWeights ?? DEFAULT_RISK_WEIGHTS,
     rules: config.riskRules,
+    concentrationScore: input.concentrationScore,
+    growthRateRatio: input.growthRateRatio,
+    enabledDetectors: {
+      suspiciousAccountDetection: config.suspiciousAccountDetection,
+      botJoinDetection: config.botJoinDetection,
+      joinPatternDetection: config.joinPatternDetection,
+      burstDetection: config.burstDetection,
+    },
   });
 
+  if (config.mode === 'MONITORING') {
+    return {
+      shouldMitigate: false,
+      action: 'LOG_ONLY',
+      evaluation,
+      escalatedByRaidShield: false,
+    };
+  }
+
+  if (config.mode === 'ALERT_ONLY') {
+    const alertTriggered = effectiveThresholdExceeded || evaluation.score >= config.riskThreshold;
+    return {
+      shouldMitigate: alertTriggered,
+      action: alertTriggered ? 'ALERT' : 'LOG_ONLY',
+      evaluation,
+      escalatedByRaidShield: false,
+    };
+  }
+
+  const patternSignals =
+    config.joinPatternDetection &&
+    (input.similarUsernameCount >= 2 || input.repetitiveJoinCount >= 1);
+  const botSignal = config.botJoinDetection && input.isBot;
+
   const corroboratingSignals =
-    input.thresholdExceeded ||
-    input.underActiveRaidShield ||
-    input.similarUsernameCount >= 2 ||
-    input.repetitiveJoinCount >= 1 ||
-    input.isBot;
+    effectiveThresholdExceeded || effectiveShield || patternSignals || botSignal;
 
   const riskMet = evaluation.score >= config.riskThreshold;
   const ageBelowMinDuringBurst =
+    config.suspiciousAccountDetection &&
     corroboratingSignals &&
     config.minAccountAgeDays > 0 &&
     input.accountAgeDays < config.minAccountAgeDays;
 
   const shouldMitigate =
-    input.thresholdExceeded || riskMet || ageBelowMinDuringBurst;
+    effectiveThresholdExceeded || riskMet || ageBelowMinDuringBurst;
 
   let action: AutoAction = evaluation.recommendedAction;
   const escalatedByRaidShield =
-    input.underActiveRaidShield &&
-    (input.accountAgeDays < Math.max(7, config.minAccountAgeDays) ||
-      !input.hasAvatar ||
-      input.similarUsernameCount >= 2 ||
-      input.thresholdExceeded);
+    effectiveShield &&
+    ((config.suspiciousAccountDetection &&
+      input.accountAgeDays < Math.max(7, config.minAccountAgeDays)) ||
+      (config.joinPatternDetection && input.similarUsernameCount >= 2) ||
+      (config.botJoinDetection && input.isBot) ||
+      effectiveThresholdExceeded);
 
   if (shouldMitigate && escalatedByRaidShield && (action === 'LOG_ONLY' || action === 'ALERT')) {
     action = config.mode === 'EMERGENCY' ? 'BAN' : 'QUARANTINE';

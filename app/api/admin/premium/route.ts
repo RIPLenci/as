@@ -9,7 +9,7 @@ import {
   parseDurationString,
   PLAN_CATALOG,
 } from '@/lib/aegis/premium';
-import { requireSuperOwner } from '@/lib/server/auth-guard';
+import { requireSuperOwner, verifyMutationOrigin } from '@/lib/server/auth-guard';
 import { aegisStore } from '@/lib/server/store';
 
 export const dynamic = 'force-dynamic';
@@ -80,6 +80,9 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const originErr = verifyMutationOrigin(req);
+  if (originErr) return originErr;
+
   const auth = await requireSuperOwner();
   if (!auth.ok) return auth.response;
 

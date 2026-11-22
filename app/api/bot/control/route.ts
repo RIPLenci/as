@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { summarizeSlashCommands } from '@/lib/aegis/bot-slash-plan';
 import { hasAnyManageableGuild, requireAuthenticatedUser } from '@/lib/server/auth-guard';
-import { connectOrRestartBot, deploySlashCommandsEverywhere } from '@/lib/server/bot-runner';
+import {
+  connectOrRestartBot,
+  deploySlashCommandsEverywhere,
+  isEmbeddedBotEnabled,
+} from '@/lib/server/bot-runner';
 import { getServerEnv } from '@/lib/server/env';
+import { aegisLogger } from '@/lib/server/logger';
+import { redisCoordinator } from '@/lib/server/redis';
 import { aegisStore } from '@/lib/server/store';
 
 export async function GET() {
@@ -24,9 +30,13 @@ export async function GET() {
       commandCount: summary.commandCount,
       totalSubcommands: summary.totalSubcommands,
       lastSync: health.lastSynchronization,
+      syncHealth: health.syncHealth ?? null,
+      latencyMetrics: health.latencyMetrics ?? null,
     });
   } catch (err) {
-    console.error('[AEGIS API] Bot control GET error:', err);
+    aegisLogger.error('DISCORD', 'Bot control GET error', {
+      meta: { error: err instanceof Error ? err.message : String(err) },
+    });
     return NextResponse.json(
       { ok: false, error: 'INTERNAL_ERROR', message: 'Error interno al consultar el estado del bot.' },
       { status: 500 }
@@ -93,6 +103,14 @@ export async function POST(req: NextRequest) {
         );
       }
 
+      if (redisCoordinator.getStatus() === 'CONNECTED') {
+        await redisCoordinator.publishControl(
+          'DEPLOY_SLASH_COMMANDS',
+          { requestedBy: currentUser.discordId },
+          aegisStore.instanceId
+        );
+      }
+
       const audit = aegisStore.appendAuditLog(state, {
         guildId: null,
         actorId: currentUser.discordId,
@@ -143,6 +161,59 @@ export async function POST(req: NextRequest) {
               'DISCORD_BOT_TOKEN no está configurado en el servidor. Añade DISCORD_BOT_TOKEN al entorno del servidor para conectar el bot a Discord.',
           },
           { status: 400 }
+        );
+      }
+
+      // If standalone bot container owns Gateway via Redis heartbeat, route control cleanly over Pub/Sub
+      const remoteHeartbeat = env.redisConfigured
+        ? await redisCoordinator.getBotHeartbeat()
+        : null;
+
+      if (remoteHeartbeat?.online) {
+        await redisCoordinator.publishControl(
+          action === 'RESTART_CLUSTER' ? 'RECONCILE_ALL' : 'PING',
+          { requestedBy: currentUser.discordId, reason: action },
+          aegisStore.instanceId
+        );
+        const slashRes = await deploySlashCommandsEverywhere();
+        const audit = aegisStore.appendAuditLog(state, {
+          guildId: null,
+          actorId: currentUser.discordId,
+          actorName: currentUser.username,
+          action: 'DISCORD_REMOTE_CONTROL_SIGNALED',
+          entityType: 'DISCORD_CLUSTER',
+          entityId: remoteHeartbeat.id || 'Standalone-Bot',
+          result: 'SUCCESS',
+          metadata: {
+            signal: action,
+            remoteInstanceId: remoteHeartbeat.instanceId ?? null,
+            slashSyncedGuilds: slashRes.guildsSynced,
+          },
+        });
+        await aegisStore.commitMutation('bot:remote_control_signaled');
+
+        return NextResponse.json({
+          ok: true,
+          success: true,
+          message: `Bot standalone conectado (${remoteHeartbeat.tag}, ${remoteHeartbeat.guildCount ?? 0} servidores, latencia ${remoteHeartbeat.pingMs ?? '-'} ms). Señal de resincronización enviada y ${slashRes.guildsSynced} servidores actualizados.`,
+          tag: remoteHeartbeat.tag,
+          pingMs: remoteHeartbeat.pingMs,
+          guildCount: remoteHeartbeat.guildCount,
+          slashGuildsSynced: slashRes.guildsSynced,
+          restartedAt: new Date().toISOString(),
+          auditId: audit.id,
+        });
+      }
+
+      if (!isEmbeddedBotEnabled()) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: 'STANDALONE_BOT_OFFLINE',
+            message:
+              'El servicio standalone del Bot de Discord (services/bot/index.ts) no reporta heartbeat activo en Redis. Inicia el contenedor del bot (`npm run start:bot`) para evitar duplicar sesiones Gateway desde la Web.',
+          },
+          { status: 503 }
         );
       }
 
@@ -207,7 +278,9 @@ export async function POST(req: NextRequest) {
       { status: 400 }
     );
   } catch (err) {
-    console.error('[AEGIS API] Bot control POST error:', err);
+    aegisLogger.error('DISCORD', 'Bot control POST error', {
+      meta: { error: err instanceof Error ? err.message : String(err) },
+    });
     return NextResponse.json(
       { ok: false, error: 'INTERNAL_ERROR', message: 'Error interno al operar el servicio del bot.' },
       { status: 500 }

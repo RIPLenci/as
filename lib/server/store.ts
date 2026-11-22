@@ -1,48 +1,27 @@
 import crypto from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
-import path from 'node:path';
 import type {
-  AntiNukeConfigRecord,
-  AntiRaidConfigRecord,
   AuditLogRecord,
-  BotPermissionGrantRecord,
-  ChannelWhitelistRecord,
-  DiscordAccountRecord,
+  BotClusterTelemetry,
+  BotShardTelemetry,
   GlobalBanAnalyticsResponse,
-  GlobalBanAppealRecord,
   GlobalBanRecord,
-  GlobalModeratorRecord,
   GuildBackupRecord,
-  GuildBackupSettingsRecord,
-  GuildLogConfigRecord,
-  GuildParticipationRecord,
   GuildPlanRecord,
   GuildRecord,
-  GuildSecuritySuiteRecord,
-  GuildSettingsRecord,
-  GuildVerificationRecord,
-  IncidentStatus,
-  LockdownStateRecord,
   NotificationRecord,
   OverviewAnalyticsResponse,
   OverviewPeriod,
   PlanTier,
   PremiumCodeRecord,
   QuarantineEntryRecord,
-  RiskAssessmentRecord,
-  SecondaryOwnerRecord,
+  SanctionActionRecord,
   SecurityEventRecord,
   SecurityIncidentRecord,
   SystemHealthSnapshot,
-  SystemSettingsRecord,
   UserPremiumSubscription,
-  UserRecord,
-  UserTwoFactorRecord,
   WhitelistEntryRecord,
-  BotShardTelemetry,
-  BotClusterTelemetry,
-  SlashCommandDefinition,
 } from '../aegis/types';
 import { normalizeHonestBotState } from '../aegis/bot-slash-plan';
 import {
@@ -55,11 +34,9 @@ import {
   isSubscriptionActive,
   normalizePlanTier,
 } from '../aegis/premium';
-import { DEFAULT_RISK_WEIGHTS } from '../aegis/risk-engine';
 import {
   dedupePreserveOrder,
   mergeWhitelistExcludedRules,
-  stripUnsafeKeys,
 } from '../aegis/security-helpers';
 import { RaidBurstShield } from '../aegis/fast-antiraid';
 import {
@@ -67,213 +44,47 @@ import {
   BoundedMemoryCache,
   SlidingWindowTracker,
 } from '../aegis/sliding-window';
-import { ensureBotStarted, getLiveBotRunnerSnapshot } from './bot-runner';
+import { aegisTelemetry } from '../aegis/telemetry';
+import { getLiveBotRunnerSnapshot } from './bot-runner';
 import { getServerEnv } from './env';
 import { verifyBotTelemetryLive } from './discord-api';
-import { ensureMongoConnected, getMongoStatus, AegisSnapshotModel } from './mongodb';
+import { aegisLogger } from './logger';
+import {
+  AegisSnapshotModel,
+  ensureMongoConnected,
+  getMongoStatus,
+  SyncOutboxModel,
+} from './mongodb';
 import { redisCoordinator } from './redis';
+import {
+  computeGlobalBanAnalytics,
+  computeOverviewAnalytics,
+} from './store-analytics';
+import {
+  AEGIS_SLASH_COMMANDS_METADATA,
+  createEmptyState,
+  DATA_DIR,
+  DATA_FILE,
+  EVIDENCE_DIR,
+  initializeGuildDefaults,
+  normalizeLoadedState,
+  type PersistedDatabaseState,
+} from './store-defaults';
+import {
+  flushPendingSyncOutbox,
+  type GuildConfigDocumentShape,
+  persistGuildConfigVersioned,
+  pullGuildConfigsFromMongo,
+} from './sync-coordinator';
 
-export { buildPlanQuotas, buildFreeGuildPlan };
-
-export interface PersistedDatabaseState {
-  users: Record<string, UserRecord>;
-  discordAccounts: Record<string, DiscordAccountRecord>;
-  guilds: Record<string, GuildRecord>;
-  guildSettings: Record<string, GuildSettingsRecord>;
-  antiRaidConfigs: Record<string, AntiRaidConfigRecord>;
-  antiNukeConfigs: Record<string, AntiNukeConfigRecord>;
-  riskAssessments: RiskAssessmentRecord[];
-  incidents: SecurityIncidentRecord[];
-  events: SecurityEventRecord[];
-  quarantines: QuarantineEntryRecord[];
-  whitelists: WhitelistEntryRecord[];
-  globalBans: GlobalBanRecord[];
-  appeals: GlobalBanAppealRecord[];
-  globalModerators: GlobalModeratorRecord[];
-  participatingServers: Record<string, GuildParticipationRecord>;
-  auditLogs: AuditLogRecord[];
-  notifications: NotificationRecord[];
-  lockdowns: Record<string, LockdownStateRecord>;
-  systemSettings: SystemSettingsRecord;
-  userGuildAccess: Record<string, string[]>; // userId -> guildIds[]
-  userGuildRoster: Record<string, GuildRecord[]>; // userId -> full Discord guild roster
-  guildPlans: Record<string, GuildPlanRecord>;
-  userSubscriptions: Record<string, UserPremiumSubscription>;
-  premiumCodes: Record<string, PremiumCodeRecord>;
-  guildSecuritySuites: Record<string, GuildSecuritySuiteRecord>;
-  botPermissions: Record<string, BotPermissionGrantRecord[]>;
-  channelWhitelists: Record<string, ChannelWhitelistRecord[]>;
-  guildVerifications: Record<string, GuildVerificationRecord>;
-  guildLogConfigs: Record<string, GuildLogConfigRecord>;
-  guildBackups: Record<string, GuildBackupRecord[]>;
-  guildBackupSettings: Record<string, GuildBackupSettingsRecord>;
-  secondaryOwners: Record<string, SecondaryOwnerRecord>;
-  userTwoFactors: Record<string, UserTwoFactorRecord>;
-}
-
-const DATA_DIR = path.join(process.cwd(), '.aegis-data');
-const DATA_FILE = path.join(DATA_DIR, 'store.json');
-export const EVIDENCE_DIR = path.join(DATA_DIR, 'evidence');
-
-export function createEmptyState(): PersistedDatabaseState {
-  return {
-    users: {},
-    discordAccounts: {},
-    guilds: {},
-    guildSettings: {},
-    antiRaidConfigs: {},
-    antiNukeConfigs: {},
-    riskAssessments: [],
-    incidents: [],
-    events: [],
-    quarantines: [],
-    whitelists: [],
-    globalBans: [],
-    appeals: [],
-    globalModerators: [],
-    participatingServers: {},
-    auditLogs: [],
-    notifications: [],
-    lockdowns: {},
-    systemSettings: {
-      sessionMaxAgeSeconds: 86_400,
-      requireDualApprovalForPermanentBan: true,
-      appealCooldownHours: 72,
-      auditRetentionDays: 365,
-      updatedAt: new Date().toISOString(),
-    },
-    userGuildAccess: {},
-    userGuildRoster: {},
-    guildPlans: {},
-    userSubscriptions: {},
-    premiumCodes: {},
-    guildSecuritySuites: {},
-    botPermissions: {},
-    channelWhitelists: {},
-    guildVerifications: {},
-    guildLogConfigs: {},
-    guildBackups: {},
-    guildBackupSettings: {},
-    secondaryOwners: {},
-    userTwoFactors: {},
-  };
-}
-
-export const AEGIS_SLASH_COMMANDS_METADATA: SlashCommandDefinition[] = [
-  {
-    name: 'antiraid',
-    description: '🛡️ | Protección Anti-Raid automática y escudos en tiempo real',
-    category: 'Seguridad / Anti-Raid',
-    defaultMemberPermissions: 'Dueño / Segundo Dueño',
-    status: 'DEPLOYED',
-    subcommands: [
-      { name: 'estado', description: '📊 | Ver el estado actual y nivel del escudo Anti-Raid', optionsCount: 0 },
-      { name: 'activar', description: '🟢 | Activar la protección automática Anti-Raid en este servidor', optionsCount: 0 },
-      { name: 'desactivar', description: '🔴 | Desactivar la protección automática Anti-Raid', optionsCount: 0 },
-      { name: 'modo', description: '⚡ | Cambiar el modo de sensibilidad (Normal, Estricto o Emergencia)', optionsCount: 1 },
-      { name: 'configurar', description: '⚙️ | Ajustar límite de ingresos, ventana y antigüedad mínima', optionsCount: 3 },
-      { name: 'probar', description: '🧪 | Ejecutar simulación diagnóstica del Motor de Riesgo', optionsCount: 0 },
-      { name: 'incidentes', description: '🚨 | Listar incidentes recientes de seguridad Anti-Raid', optionsCount: 0 },
-    ],
-  },
-  {
-    name: 'antinuke',
-    description: '💣 | Defensa Anti-Nuke contra destrucción masiva de canales y roles',
-    category: 'Defensa Anti-Nuke',
-    defaultMemberPermissions: 'Dueño / Segundo Dueño',
-    status: 'DEPLOYED',
-    subcommands: [
-      { name: 'estado', description: '📊 | Consultar el estado y métricas del escudo Anti-Nuke', optionsCount: 0 },
-      { name: 'activar', description: '🟢 | Activar defensa Anti-Nuke con contención inmediata', optionsCount: 0 },
-      { name: 'desactivar', description: '🔴 | Desactivar temporalmente la defensa Anti-Nuke', optionsCount: 0 },
-      { name: 'configurar', description: '⚙️ | Definir límites máximos de canales y roles modificados', optionsCount: 2 },
-      { name: 'incidentes', description: '🚨 | Mostrar alertas críticas recientes de Anti-Nuke', optionsCount: 0 },
-    ],
-  },
-  {
-    name: 'seguridad',
-    description: '🔐 | Módulos de seguridad (Anti-Alts, Anti-Bots, Anti-Scam y Anti-Flood)',
-    category: 'Seguridad Adicional',
-    defaultMemberPermissions: 'Dueño / Segundo Dueño',
-    status: 'DEPLOYED',
-    subcommands: [
-      { name: 'estado', description: '📊 | Ver el estado de todas las capas de seguridad adicional', optionsCount: 0 },
-      { name: 'antialts', description: '🕵️ | Configurar filtro Anti-Alts por antigüedad mínima de cuenta', optionsCount: 2 },
-      { name: 'antibots', description: '🤖 | Configurar política de admisión y bloqueo de bots', optionsCount: 1 },
-      { name: 'antiinvitaciones', description: '🚫 | Activar o desactivar el bloqueo de invitaciones de Discord', optionsCount: 1 },
-      { name: 'antienlaces', description: '🔗 | Activar o desactivar el filtro de enlaces externos', optionsCount: 1 },
-      { name: 'antiflood', description: '🌊 | Activar o desactivar la mitigación rápida Anti-Flood', optionsCount: 1 },
-      { name: 'antiscam', description: '🎣 | Activar o desactivar la detección de estafas y phishing', optionsCount: 1 },
-      { name: 'antieveryone', description: '📢 | Proteger el rol @everyone contra escalamiento de permisos', optionsCount: 1 },
-    ],
-  },
-  {
-    name: 'cuarentena',
-    description: '⛓️ | Gestión de cuarentena y aislamiento inmediato de cuentas',
-    category: 'Contención',
-    defaultMemberPermissions: 'Dueño / Segundo Dueño',
-    status: 'DEPLOYED',
-    subcommands: [
-      { name: 'aislar', description: '🔒 | Aislar a un usuario sospechoso en cuarentena de seguridad', optionsCount: 3 },
-      { name: 'liberar', description: '🔓 | Liberar a un usuario de la cuarentena activa', optionsCount: 1 },
-      { name: 'lista', description: '📋 | Listar las cuentas actualmente aisladas en cuarentena', optionsCount: 0 },
-      { name: 'detalle', description: '🔍 | Consultar el historial y motivo de cuarentena de un usuario', optionsCount: 1 },
-    ],
-  },
-  {
-    name: 'bloqueo',
-    description: '🚨 | Bloqueo de emergencia (Lockdown) reversible por servidor',
-    category: 'Emergencia',
-    defaultMemberPermissions: 'Dueño / Segundo Dueño',
-    status: 'DEPLOYED',
-    subcommands: [
-      { name: 'activar', description: '🔒 | Activar bloqueo de emergencia en los canales del servidor', optionsCount: 2 },
-      { name: 'desactivar', description: '🔓 | Desactivar el bloqueo y restaurar los permisos previos', optionsCount: 0 },
-      { name: 'estado', description: '📊 | Consultar el estado actual del bloqueo y canales cerrados', optionsCount: 0 },
-      { name: 'configurar', description: '⚙️ | Ajustar restricciones de texto y voz durante el bloqueo', optionsCount: 2 },
-    ],
-  },
-  {
-    name: 'whitelist',
-    description: '📜 | Gestión de lista blanca y excepciones de seguridad por regla',
-    category: 'Excepciones',
-    defaultMemberPermissions: 'Dueño / Segundo Dueño',
-    status: 'DEPLOYED',
-    subcommands: [
-      { name: 'agregar', description: '✅ | Añadir un usuario o bot de confianza a la lista blanca', optionsCount: 3 },
-      { name: 'quitar', description: '🗑️ | Revocar una excepción activa de la lista blanca', optionsCount: 1 },
-      { name: 'lista', description: '📋 | Listar todas las excepciones activas del servidor', optionsCount: 0 },
-      { name: 'verificar', description: '🔍 | Consultar las excepciones asignadas a un ID de Discord', optionsCount: 1 },
-    ],
-  },
-  {
-    name: 'premium',
-    description: '👑 | Membresías Plan Oro y Diamante, canje de códigos y gestión',
-    category: 'Membresías',
-    defaultMemberPermissions: 'Bot Staff / Usuarios (ver y canjear)',
-    status: 'DEPLOYED',
-    subcommands: [
-      { name: 'anadir', description: '➕ | [Staff] Añadir tiempo de Plan Oro o Diamante a un usuario', optionsCount: 3 },
-      { name: 'ver', description: '👁️ | Consultar tu plan activo, tiempo restante y servidores', optionsCount: 1 },
-      { name: 'eliminar', description: '🗑️ | [Staff] Revocar membresía Premium y desactivar beneficios', optionsCount: 1 },
-      { name: 'codigo', description: '🎟️ | [Staff] Generar código canjeable para Plan Oro o Diamante', optionsCount: 4 },
-      { name: 'canjear', description: '🎁 | Canjear un código Premium y acumular tiempo en tu cuenta', optionsCount: 1 },
-    ],
-  },
-  {
-    name: 'aegis',
-    description: '⚡ | Centro de control interactivo y diagnóstico de AEGIS SECURITY',
-    category: 'Plataforma',
-    defaultMemberPermissions: 'Dueño / Segundo Dueño / Ayuda',
-    status: 'DEPLOYED',
-    subcommands: [
-      { name: 'panel', description: '🎛️ | Abrir el panel interactivo Components V2 del servidor', optionsCount: 0 },
-      { name: 'estado', description: '📊 | Ver el resumen general de seguridad y plan del servidor', optionsCount: 0 },
-      { name: 'diagnostico', description: '🩺 | Verificar permisos del bot, latencia y caché en vivo', optionsCount: 0 },
-      { name: 'ayuda', description: '📖 | Mostrar la guía completa de comandos slash disponibles', optionsCount: 0 },
-    ],
-  },
-];
+export {
+  AEGIS_SLASH_COMMANDS_METADATA,
+  buildFreeGuildPlan,
+  buildPlanQuotas,
+  createEmptyState,
+  EVIDENCE_DIR,
+  type PersistedDatabaseState,
+};
 
 class AegisStore extends EventEmitter {
   private state: PersistedDatabaseState | null = null;
@@ -289,10 +100,13 @@ class AegisStore extends EventEmitter {
   private hotCommitTimer: NodeJS.Timeout | null = null;
   private diskWriteInFlight: Promise<void> = Promise.resolve();
   private mongoHydrationPromise: Promise<void> | null = null;
+  private mongoHydrated = false;
   private hotGlobalBanMap = new Map<string, GlobalBanRecord>();
   private hotWhitelistMap = new Map<string, Set<string>>();
   private hotChannelWhitelistMap = new Map<string, Set<string>>();
   private knownInitializedGuilds = new Set<string>();
+  private reconnectHookAttached = false;
+  private pendingGuildSyncIds = new Set<string>();
   private botLiveCache: {
     checkedAt: number;
     online: boolean;
@@ -316,9 +130,32 @@ class AegisStore extends EventEmitter {
   constructor() {
     super();
     this.setMaxListeners(100);
+    this.attachRedisReconnectHook();
   }
 
-  private mongoHydrated = false;
+  private attachRedisReconnectHook(): void {
+    if (this.reconnectHookAttached) return;
+    this.reconnectHookAttached = true;
+    redisCoordinator.onReconnect(() => {
+      void this.handleRedisReconnected();
+    });
+  }
+
+  private async handleRedisReconnected(): Promise<void> {
+    try {
+      const flushed = await flushPendingSyncOutbox(this.instanceId);
+      const pulled = await this.reconcileGuildConfigsFromMongo();
+      if (flushed > 0 || pulled > 0) {
+        aegisLogger.info('SYNC', 'Redis reconnect reconciliation finished', {
+          meta: { flushedOutbox: flushed, pulledGuildConfigs: pulled },
+        });
+      }
+    } catch (err) {
+      aegisLogger.warn('SYNC', 'Redis reconnect reconciliation warning', {
+        meta: { err },
+      });
+    }
+  }
 
   public rebuildHotIndexes(stateArg?: PersistedDatabaseState | null): void {
     const st = stateArg ?? this.state;
@@ -366,7 +203,11 @@ class AegisStore extends EventEmitter {
       this.hotGlobalBanMap.delete(discordId);
       return undefined;
     }
-    if (entry.sanctionType === 'TEMPORARY' && entry.expiresAt && new Date(entry.expiresAt).getTime() <= Date.now()) {
+    if (
+      entry.sanctionType === 'TEMPORARY' &&
+      entry.expiresAt &&
+      new Date(entry.expiresAt).getTime() <= Date.now()
+    ) {
       this.hotGlobalBanMap.delete(discordId);
       return undefined;
     }
@@ -384,7 +225,14 @@ class AegisStore extends EventEmitter {
     return this.hotChannelWhitelistMap.get(guildId)?.has(channelId) ?? false;
   }
 
+  /**
+   * Reloads local disk fallback ONLY when MongoDB is unconfigured (single-host / test mode).
+   * In multi-container deployments with MONGODB_URI, MongoDB + Redis Pub/Sub is authoritative.
+   */
   public reloadFromDiskIfNewer(): boolean {
+    if (getServerEnv().mongodbConfigured && getMongoStatus() === 'CONNECTED') {
+      return false;
+    }
     if (!fs.existsSync(DATA_FILE)) return false;
     try {
       const stat = fs.statSync(DATA_FILE);
@@ -394,7 +242,7 @@ class AegisStore extends EventEmitter {
       }
       const raw = fs.readFileSync(DATA_FILE, 'utf8');
       const parsed = JSON.parse(raw) as Partial<PersistedDatabaseState>;
-      this.state = this.normalizeLoadedState({
+      this.state = normalizeLoadedState({
         ...createEmptyState(),
         ...parsed,
       });
@@ -402,7 +250,8 @@ class AegisStore extends EventEmitter {
       this.knownInitializedGuilds.clear();
       this.rebuildHotIndexes(this.state);
       return true;
-    } catch {
+    } catch (err) {
+      aegisLogger.warn('SYSTEM', 'Failed reloading local store fallback file', { meta: { err } });
       return false;
     }
   }
@@ -410,90 +259,16 @@ class AegisStore extends EventEmitter {
   public getHotStateSync(): PersistedDatabaseState {
     if (this.state) {
       const now = Date.now();
-      if (now - this.lastHotDiskCheckAt >= 1500) {
+      if (
+        (!getServerEnv().mongodbConfigured || getMongoStatus() !== 'CONNECTED') &&
+        now - this.lastHotDiskCheckAt >= 1500
+      ) {
         this.reloadFromDiskIfNewer();
       }
       return this.state;
     }
     const loaded = this.loadFromDisk();
     this.rebuildHotIndexes(loaded);
-    return loaded;
-  }
-
-  private normalizeLoadedState(loaded: PersistedDatabaseState): PersistedDatabaseState {
-    loaded.users = stripUnsafeKeys(
-      loaded.users && typeof loaded.users === 'object' ? loaded.users : {}
-    );
-    loaded.discordAccounts = stripUnsafeKeys(
-      loaded.discordAccounts && typeof loaded.discordAccounts === 'object'
-        ? loaded.discordAccounts
-        : {}
-    );
-    loaded.guilds = stripUnsafeKeys(
-      loaded.guilds && typeof loaded.guilds === 'object' ? loaded.guilds : {}
-    );
-    loaded.userSubscriptions = stripUnsafeKeys(
-      loaded.userSubscriptions && typeof loaded.userSubscriptions === 'object'
-        ? loaded.userSubscriptions
-        : {}
-    );
-    loaded.premiumCodes = stripUnsafeKeys(
-      loaded.premiumCodes && typeof loaded.premiumCodes === 'object' ? loaded.premiumCodes : {}
-    );
-
-    for (const sub of Object.values(loaded.userSubscriptions)) {
-      if (sub && Array.isArray(sub.activatedGuildIds)) {
-        sub.activatedGuildIds = dedupePreserveOrder(sub.activatedGuildIds);
-      }
-    }
-
-    for (const an of Object.values(loaded.antiNukeConfigs ?? {})) {
-      if (an && Array.isArray(an.authorizedAdminIds)) {
-        an.authorizedAdminIds = dedupePreserveOrder(an.authorizedAdminIds);
-      }
-    }
-
-    for (const [gid, plan] of Object.entries(loaded.guildPlans ?? {})) {
-      const normalizedTier = normalizePlanTier(plan?.tier);
-      const rawSrc = plan?.activationSource as string | undefined;
-      const normalizedSource: GuildPlanRecord['activationSource'] =
-        rawSrc === 'USER_SLOT' ||
-        rawSrc === 'CODE_REDEEM' ||
-        rawSrc === 'STAFF_PANEL' ||
-        rawSrc === 'DISCORD_SLASH' ||
-        rawSrc === 'FREE_DEFAULT'
-          ? rawSrc
-          : normalizedTier === 'FREE'
-          ? 'FREE_DEFAULT'
-          : 'USER_SLOT';
-      loaded.guildPlans[gid] = {
-        guildId: gid,
-        tier: normalizedTier,
-        ownerUserId: plan?.ownerUserId ?? null,
-        activatedAt: plan?.activatedAt ?? null,
-        expiresAt: plan?.expiresAt ?? null,
-        activatedBy: plan?.activatedBy ?? null,
-        activationSource: normalizedSource,
-        quotas: buildPlanQuotas(normalizedTier),
-      };
-    }
-    for (const [gid, bSettings] of Object.entries(loaded.guildBackupSettings ?? {})) {
-      if (bSettings) {
-        loaded.guildBackupSettings[gid] = {
-          ...bSettings,
-          autoBackupSchedule:
-            bSettings.autoBackupSchedule === 'DAILY' || bSettings.autoBackupSchedule === 'WEEKLY'
-              ? 'AUTO'
-              : bSettings.autoBackupSchedule || 'OFF',
-        };
-      }
-    }
-    if (Array.isArray(loaded.incidents) && loaded.incidents.length > 500) {
-      loaded.incidents = loaded.incidents.slice(0, 500);
-    }
-    if (Array.isArray(loaded.events) && loaded.events.length > 500) {
-      loaded.events = loaded.events.slice(0, 500);
-    }
     return loaded;
   }
 
@@ -509,15 +284,17 @@ class AegisStore extends EventEmitter {
         const stat = fs.statSync(DATA_FILE);
         const raw = fs.readFileSync(DATA_FILE, 'utf8');
         const parsed = JSON.parse(raw) as Partial<PersistedDatabaseState>;
-        this.state = this.normalizeLoadedState({
+        this.state = normalizeLoadedState({
           ...createEmptyState(),
           ...parsed,
         });
         this.lastDiskMtimeMs = stat.mtimeMs;
         this.rebuildHotIndexes(this.state);
         return this.state;
-      } catch {
-        // Corrupted file fallback to fresh empty state
+      } catch (err) {
+        aegisLogger.warn('SYSTEM', 'Corrupted store.json encountered; initializing clean state', {
+          meta: { err },
+        });
       }
     }
 
@@ -525,6 +302,75 @@ class AegisStore extends EventEmitter {
     this.rebuildHotIndexes(this.state);
     this.persistToDisk();
     return this.state;
+  }
+
+  /**
+   * Applies an authoritative versioned guild configuration from MongoDB while rejecting
+   * out-of-order stale versions (`doc.syncVersion < local.syncVersion`).
+   */
+  public applyVersionedGuildConfig(doc: GuildConfigDocumentShape): boolean {
+    const state = this.state ?? this.loadFromDisk();
+    const guildName = state.guilds[doc.guildId]?.name ?? `Servidor ${doc.guildId}`;
+    this.ensureGuildStructures(state, doc.guildId, guildName);
+
+    const localAntiRaid = state.antiRaidConfigs[doc.guildId];
+    if (localAntiRaid && doc.syncVersion < localAntiRaid.syncVersion) {
+      aegisLogger.debug('SYNC', 'Ignoring stale GuildConfig version from remote pull', {
+        guildId: doc.guildId,
+        syncVersion: doc.syncVersion,
+        meta: { localSyncVersion: localAntiRaid.syncVersion },
+      });
+      return false;
+    }
+
+    state.antiRaidConfigs[doc.guildId] = {
+      ...localAntiRaid,
+      ...doc.antiRaidConfig,
+      syncVersion: doc.syncVersion,
+      configHash: doc.configHash,
+      syncStatus: 'SYNCHRONIZED',
+      lastSyncedAt: doc.updatedAt || new Date().toISOString(),
+    };
+    if (doc.guildSettings) {
+      state.guildSettings[doc.guildId] = { ...doc.guildSettings };
+    }
+    if (doc.antiNukeConfig) {
+      state.antiNukeConfigs[doc.guildId] = { ...doc.antiNukeConfig };
+    }
+    if (doc.securitySuite) {
+      state.guildSecuritySuites[doc.guildId] = { ...doc.securitySuite };
+    }
+    this.syncGuildRecord(state, doc.guildId, {
+      protectionEnabled: doc.antiRaidConfig.enabled,
+      lastSyncAt: doc.updatedAt || new Date().toISOString(),
+    });
+    this.l1Cache.invalidateByPrefix(`guild:${doc.guildId}:`);
+    this.lastSyncAt = new Date().toISOString();
+    return true;
+  }
+
+  public async reconcileGuildConfigsFromMongo(targetGuildId?: string): Promise<number> {
+    if (!getServerEnv().mongodbConfigured) return 0;
+    const status = await ensureMongoConnected();
+    if (status !== 'CONNECTED') return 0;
+
+    const docs = await pullGuildConfigsFromMongo(targetGuildId);
+    let applied = 0;
+    for (const doc of docs) {
+      if (this.applyVersionedGuildConfig(doc)) {
+        applied += 1;
+      }
+    }
+    if (applied > 0) {
+      this.rebuildHotIndexes(this.state);
+      this.emit('aegis:update', {
+        event: targetGuildId ? 'guild_config:reconciled' : 'guild_configs:reconciled',
+        guildId: targetGuildId ?? null,
+        payload: { applied },
+        timestamp: new Date().toISOString(),
+      });
+    }
+    return applied;
   }
 
   private async tryHydrateFromMongoIfEmpty(loaded: PersistedDatabaseState): Promise<void> {
@@ -545,28 +391,30 @@ class AegisStore extends EventEmitter {
       Object.keys(loaded.guilds).length === 0 &&
       Object.keys(loaded.userSubscriptions).length === 0 &&
       loaded.incidents.length === 0;
-    if (!isBlank) {
-      this.mongoHydrated = true;
-      return;
-    }
 
     this.mongoHydrationPromise = (async () => {
       try {
         const status = await ensureMongoConnected();
         if (status !== 'CONNECTED') return;
-        const doc = (await AegisSnapshotModel.findOne({ key: 'aegis_primary_state' }).lean()) as {
-          payload?: PersistedDatabaseState;
-        } | null;
-        if (doc?.payload && typeof doc.payload === 'object') {
-          this.state = this.normalizeLoadedState({
-            ...createEmptyState(),
-            ...doc.payload,
-          });
-          this.rebuildHotIndexes(this.state);
-          this.persistToDisk();
+
+        if (isBlank) {
+          const doc = (await AegisSnapshotModel.findOne({ key: 'aegis_primary_state' }).lean()) as {
+            payload?: PersistedDatabaseState;
+          } | null;
+          if (doc?.payload && typeof doc.payload === 'object') {
+            this.state = normalizeLoadedState({
+              ...createEmptyState(),
+              ...doc.payload,
+            });
+            this.rebuildHotIndexes(this.state);
+            this.persistToDisk();
+          }
         }
-      } catch {
-        // Non-fatal fallback to local disk store
+
+        // Always overlay authoritative per-guild versioned configs from MongoDB
+        await this.reconcileGuildConfigsFromMongo();
+      } catch (err) {
+        aegisLogger.error('MONGODB', 'Initial MongoDB hydration failed', { meta: { err } });
       } finally {
         this.mongoHydrated = true;
         this.mongoHydrationPromise = null;
@@ -589,221 +437,28 @@ class AegisStore extends EventEmitter {
     ) {
       return;
     }
-    const nowIso = new Date().toISOString();
-    if (!state.guildSettings[guildId]) {
-      state.guildSettings[guildId] = {
-        guildId,
-        alertChannelId: null,
-        alertChannelName: null,
-        quarantineRoleId: null,
-        quarantineRoleName: null,
-        authorizedMentionRoleIds: [],
-        alertBatchIntervalSeconds: 15,
-        deduplicateAlerts: true,
-        minAlertSeverity: 'MODERATE',
-        updatedAt: nowIso,
-      };
-    }
-
-    if (!state.antiRaidConfigs[guildId]) {
-      state.antiRaidConfigs[guildId] = {
-        guildId,
-        enabled: false,
-        activatedAt: null,
-        mode: 'NORMAL',
-        sensitivity: 'BALANCED',
-        maxJoins: 8,
-        timeWindowSeconds: 10,
-        minAccountAgeDays: 7,
-        suspiciousAccountDetection: true,
-        botJoinDetection: true,
-        joinPatternDetection: true,
-        burstDetection: true,
-        riskThreshold: 70,
-        defaultAction: 'QUARANTINE',
-        riskRules: [
-          { level: 'LOW', action: 'LOG_ONLY', notifyAlertChannel: false },
-          { level: 'MODERATE', action: 'ALERT', notifyAlertChannel: true },
-          { level: 'HIGH', action: 'QUARANTINE', notifyAlertChannel: true },
-          { level: 'CRITICAL', action: 'QUARANTINE', notifyAlertChannel: true },
-        ],
-        riskWeights: { ...DEFAULT_RISK_WEIGHTS },
-        eventsProcessed: 0,
-        attacksDetected: 0,
-        attacksPrevented: 0,
-        syncVersion: 1,
-        lastSyncedAt: nowIso,
-      };
-    }
-
-    if (!state.antiNukeConfigs[guildId]) {
-      state.antiNukeConfigs[guildId] = {
-        guildId,
-        enabled: false,
-        maxChannelDeletions: 2,
-        maxChannelCreations: 4,
-        maxRoleMutations: 3,
-        maxMassBansKicks: 4,
-        maxWebhookMutations: 2,
-        timeWindowSeconds: 15,
-        detectDangerousPermissionChanges: true,
-        authorizedAdminIds: [],
-        autoResponse: {
-          logEvent: true,
-          sendAlert: true,
-          stripDangerousPermissions: true,
-          quarantineExecutor: true,
-          triggerLockdown: false,
-        },
-        updatedAt: nowIso,
-      };
-    }
-
-    if (!state.lockdowns[guildId]) {
-      state.lockdowns[guildId] = {
-        guildId,
-        active: false,
-        mode: 'MANUAL',
-        reason: null,
-        activatedBy: null,
-        activatedAt: null,
-        scheduledEndAt: null,
-        affectedChannelCount: 0,
-        affectedRoleIds: ['@everyone'],
-        restrictions: {
-          lockSendMessages: true,
-          lockAddReactions: true,
-          lockCreateThreads: true,
-          lockVoiceConnect: false,
-          disableInvites: true,
-        },
-        snapshots: [],
-        lastRestoredAt: null,
-      };
-    }
-
-    if (!state.participatingServers[guildId]) {
-      state.participatingServers[guildId] = {
-        guildId,
-        guildName,
-        globalBanEnabled: false,
-        enforcementMode: 'ALERT_ONLY',
-        actionPolicy: 'NOTIFY_STAFF',
-        notificationChannelId: state.guildSettings[guildId]?.alertChannelId ?? null,
-        syncStatus: 'DISABLED',
-        lastSyncedAt: nowIso,
-      };
-    }
-
-    if (!state.guildPlans[guildId]) {
-      state.guildPlans[guildId] = buildFreeGuildPlan(guildId);
-    }
-
-    if (!state.guildSecuritySuites[guildId]) {
-      state.guildSecuritySuites[guildId] = {
-        guildId,
-        punishmentAction: 'QUARANTINE',
-        antiRaidModules: {
-          channelCreate: { enabled: false, actionsPerMinute: 2, premiumOnly: false },
-          channelDelete: { enabled: false, actionsPerMinute: 1, premiumOnly: false },
-          channelEdit: { enabled: false, actionsPerMinute: 3, premiumOnly: true },
-          roleCreate: { enabled: false, actionsPerMinute: 2, premiumOnly: false },
-          roleDelete: { enabled: false, actionsPerMinute: 1, premiumOnly: false },
-          roleEdit: { enabled: false, actionsPerMinute: 3, premiumOnly: true },
-          emojiCreate: { enabled: false, actionsPerMinute: 3, premiumOnly: true },
-          emojiDelete: { enabled: false, actionsPerMinute: 2, premiumOnly: true },
-          memberKick: { enabled: false, actionsPerMinute: 2, premiumOnly: false },
-          memberBan: { enabled: false, actionsPerMinute: 2, premiumOnly: false },
-          memberUnban: { enabled: false, actionsPerMinute: 2, premiumOnly: false },
-          webhookEdit: { enabled: false, actionsPerMinute: 2, premiumOnly: true },
-        },
-        additionalSecurity: {
-          banMaliciousUsers: false,
-          antiFlood: { enabled: false, maxMessages: 6, windowSeconds: 5, muteMinutes: 10 },
-          antiScam: { enabled: false, muteMinutes: 30, deleteMessage: true },
-          antiEveryonePerms: false,
-          antiWebhookSpam: false,
-          antiMassMute: { enabled: false, maxMutesPerMinute: 3 },
-          antiAlts: { enabled: false, minAccountAgeDays: 7 },
-          antiBots: 'DISABLED',
-          antiInvites: false,
-          antiLinks: { enabled: false, allowedDomains: [] },
-        },
-        updatedAt: nowIso,
-      };
-    }
-
-    if (!state.botPermissions[guildId]) {
-      state.botPermissions[guildId] = [];
-    }
-
-    if (!state.channelWhitelists[guildId]) {
-      state.channelWhitelists[guildId] = [];
-    }
-
-    if (!state.guildVerifications[guildId]) {
-      state.guildVerifications[guildId] = {
-        guildId,
-        enabled: false,
-        mode: 'BUTTON',
-        channelId: null,
-        channelName: null,
-        verifiedRoleId: null,
-        verifiedRoleName: null,
-        unverifiedRoleId: null,
-        blockSuspiciousAccounts: true,
-        kickUnverifiedAfterMinutes: null,
-        panelTitle: 'AEGIS Security Verification',
-        panelDescription: 'Complete quick verification to access community channels.',
-        updatedAt: nowIso,
-      };
-    }
-
-    if (!state.guildLogConfigs[guildId]) {
-      state.guildLogConfigs[guildId] = {
-        guildId,
-        channelId: state.guildSettings[guildId]?.alertChannelId ?? null,
-        channelName: state.guildSettings[guildId]?.alertChannelName ?? null,
-        events: {
-          moderation: true,
-          antiRaid: true,
-          antiNuke: true,
-          verification: true,
-          backups: true,
-        },
-        updatedAt: nowIso,
-      };
-    }
-
-    if (!state.guildBackups[guildId]) {
-      state.guildBackups[guildId] = [];
-    }
-
-    if (!state.guildBackupSettings[guildId]) {
-      state.guildBackupSettings[guildId] = {
-        guildId,
-        autoBackupSchedule: 'OFF',
-        lastAutoBackupAt: null,
-      };
-    }
-
+    initializeGuildDefaults(state, guildId, guildName);
     this.knownInitializedGuilds.add(guildId);
   }
 
   private persistToDisk(): void {
     if (!this.state) return;
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
-    }
-    const tmp = `${DATA_FILE}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(this.state, null, 2), { encoding: 'utf8', mode: 0o600 });
-    fs.renameSync(tmp, DATA_FILE);
     try {
-      this.lastDiskMtimeMs = fs.statSync(DATA_FILE).mtimeMs;
-    } catch {
-      // ignore stat race
+      if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+      }
+      const tmp = `${DATA_FILE}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(this.state, null, 2), { encoding: 'utf8', mode: 0o600 });
+      fs.renameSync(tmp, DATA_FILE);
+      try {
+        this.lastDiskMtimeMs = fs.statSync(DATA_FILE).mtimeMs;
+      } catch {
+        // ignore stat race
+      }
+      this.lastSyncAt = new Date().toISOString();
+    } catch (err) {
+      aegisLogger.error('SYSTEM', 'Synchronous store persistence failed', { meta: { err } });
     }
-    this.lastSyncAt = new Date().toISOString();
   }
 
   private async persistToDiskAsync(): Promise<void> {
@@ -818,12 +473,12 @@ class AegisStore extends EventEmitter {
         try {
           this.lastDiskMtimeMs = (await fs.promises.stat(DATA_FILE)).mtimeMs;
         } catch {
-          // ignore
+          // ignore stat race
         }
         this.lastSyncAt = new Date().toISOString();
       })
-      .catch(() => {
-        // Non-fatal async flush error
+      .catch((err) => {
+        aegisLogger.error('SYSTEM', 'Asynchronous store flush failed', { meta: { err } });
       });
     return this.diskWriteInFlight;
   }
@@ -842,6 +497,7 @@ class AegisStore extends EventEmitter {
       this.rebuildHotIndexes(this.state);
     }
     if (guildId) {
+      this.pendingGuildSyncIds.add(guildId);
       this.l1Cache.invalidateByPrefix(`guild:${guildId}:`);
     } else {
       this.l1Cache.invalidateByPrefix('global:');
@@ -859,16 +515,45 @@ class AegisStore extends EventEmitter {
       this.hotCommitTimer = setTimeout(() => {
         this.hotCommitTimer = null;
         void this.persistToDiskAsync();
+        const guildIdsToFlush = Array.from(this.pendingGuildSyncIds);
+        this.pendingGuildSyncIds.clear();
+
         if (getMongoStatus() === 'CONNECTED' && this.state) {
           AegisSnapshotModel.findOneAndUpdate(
             { key: 'aegis_primary_state' },
             { key: 'aegis_primary_state', payload: this.state, updatedAt: new Date() },
             { upsert: true }
-          ).catch(() => {});
+          ).catch((err) => {
+            aegisLogger.error('MONGODB', 'Hot snapshot upsert failed', { meta: { err } });
+          });
+
+          for (const gid of guildIdsToFlush) {
+            const cfg = this.state.antiRaidConfigs[gid];
+            if (cfg) {
+              void persistGuildConfigVersioned({
+                guildId: gid,
+                eventName,
+                correlationId: aegisLogger.createCorrelationId('hot'),
+                originProcessId: this.instanceId,
+                antiRaidConfig: cfg,
+                guildSettings: this.state.guildSettings[gid] ?? null,
+                antiNukeConfig: this.state.antiNukeConfigs[gid] ?? null,
+                securitySuite: this.state.guildSecuritySuites[gid] ?? null,
+              });
+            }
+          }
         }
-        void redisCoordinator
-          .publish('aegis:sync', eventName, payload ?? {}, guildId, this.instanceId)
-          .catch(() => {});
+
+        if (guildIdsToFlush.length === 0 || getMongoStatus() !== 'CONNECTED') {
+          void redisCoordinator
+            .publish('aegis:sync', eventName, payload ?? {}, guildId, this.instanceId)
+            .catch((err) => {
+              aegisLogger.warn('REDIS', 'Hot commit Redis publish failed', {
+                guildId,
+                meta: { eventName, err },
+              });
+            });
+        }
       }, 120);
     }
   }
@@ -896,11 +581,13 @@ class AegisStore extends EventEmitter {
   async commitMutation(
     eventName: string,
     guildId?: string,
-    payload?: unknown
-  ): Promise<void> {
+    payload?: unknown,
+    options?: { correlationId?: string; skipVersionBump?: boolean }
+  ): Promise<{ syncVersion?: number; mongoPersisted: boolean; redisPublished: boolean }> {
     if (this.hotCommitTimer) {
       clearTimeout(this.hotCommitTimer);
       this.hotCommitTimer = null;
+      this.pendingGuildSyncIds.clear();
     }
     this.rebuildHotIndexes(this.state);
     this.persistToDisk();
@@ -910,24 +597,103 @@ class AegisStore extends EventEmitter {
       this.l1Cache.invalidateByPrefix('global:');
     }
 
-    // Mirror state snapshot to MongoDB L3 if configured and connected
+    const correlationId = options?.correlationId ?? aegisLogger.createCorrelationId('mut');
+    let mongoPersisted = false;
+    let redisPublished = false;
+    let syncVersion: number | undefined;
+
     if (getMongoStatus() === 'CONNECTED' && this.state) {
-      AegisSnapshotModel.findOneAndUpdate(
-        { key: 'aegis_primary_state' },
-        { key: 'aegis_primary_state', payload: this.state, updatedAt: new Date() },
-        { upsert: true }
-      ).catch(() => {
-        // Non-blocking background L3 sync
-      });
+      try {
+        await AegisSnapshotModel.findOneAndUpdate(
+          { key: 'aegis_primary_state' },
+          { key: 'aegis_primary_state', payload: this.state, updatedAt: new Date() },
+          { upsert: true }
+        );
+        mongoPersisted = true;
+      } catch (err) {
+        aegisLogger.error('MONGODB', 'commitMutation snapshot write failed', {
+          guildId,
+          correlationId,
+          meta: { eventName, err },
+        });
+      }
+
+      if (guildId && this.state.antiRaidConfigs[guildId]) {
+        const res = await persistGuildConfigVersioned({
+          guildId,
+          eventName,
+          correlationId,
+          originProcessId: this.instanceId,
+          antiRaidConfig: this.state.antiRaidConfigs[guildId],
+          guildSettings: this.state.guildSettings[guildId] ?? null,
+          antiNukeConfig: this.state.antiNukeConfigs[guildId] ?? null,
+          securitySuite: this.state.guildSecuritySuites[guildId] ?? null,
+        });
+        syncVersion = res.syncVersion;
+        mongoPersisted = mongoPersisted || res.mongoPersisted;
+        redisPublished = res.redisPublished;
+      }
     }
 
-    await redisCoordinator.publish('aegis:sync', eventName, payload ?? {}, guildId, this.instanceId);
+    if (!guildId || !redisPublished) {
+      redisPublished = await redisCoordinator.publish(
+        'aegis:sync',
+        eventName,
+        payload ?? {},
+        guildId,
+        this.instanceId,
+        { syncVersion, correlationId }
+      );
+    }
+
+    this.lastSyncAt = new Date().toISOString();
     this.emit('aegis:update', {
       event: eventName,
       guildId: guildId ?? null,
       payload: payload ?? null,
-      timestamp: new Date().toISOString(),
+      timestamp: this.lastSyncAt,
     });
+
+    return { syncVersion, mongoPersisted, redisPublished };
+  }
+
+  /**
+   * Records exact sanction attempt outcome on guild counters without inflating mitigated metrics
+   * when Discord API rejected or bot lacked required permissions.
+   */
+  recordSanctionOutcome(
+    state: PersistedDatabaseState,
+    guildId: string,
+    record: SanctionActionRecord,
+    timestamps?: { eventAt?: string; detectorRunAt?: string }
+  ): void {
+    const cfg = state.antiRaidConfigs[guildId];
+    if (!cfg) return;
+
+    cfg.lastEventAt = timestamps?.eventAt ?? record.createdAt;
+    cfg.lastDetectorRunAt = timestamps?.detectorRunAt ?? record.createdAt;
+    cfg.actionsAttempted = (cfg.actionsAttempted ?? 0) + 1;
+
+    if (record.status === 'SUCCESS') {
+      cfg.attacksPrevented += 1;
+      cfg.actionsSucceeded = (cfg.actionsSucceeded ?? 0) + 1;
+      cfg.lastSuccessfulActionAt = record.completedAt ?? new Date().toISOString();
+    } else if (record.status === 'CANCELLED') {
+      cfg.actionsCancelled = (cfg.actionsCancelled ?? 0) + 1;
+      cfg.lastErrorAt = record.completedAt ?? new Date().toISOString();
+      cfg.lastErrorMessage =
+        record.errorMessage ||
+        (record.missingPermissions?.length
+          ? `Permisos faltantes: ${record.missingPermissions.join(', ')}`
+          : 'Acción cancelada por precondiciones');
+      if (record.missingPermissions?.length) {
+        cfg.botPermissionsMissing = [...record.missingPermissions];
+      }
+    } else if (record.status === 'FAILED') {
+      cfg.actionsFailed = (cfg.actionsFailed ?? 0) + 1;
+      cfg.lastErrorAt = record.completedAt ?? new Date().toISOString();
+      cfg.lastErrorMessage = record.errorMessage || 'Fallo al ejecutar sanción en Discord API';
+    }
   }
 
   syncGuildRecord(
@@ -1129,9 +895,6 @@ class AegisStore extends EventEmitter {
     return false;
   }
 
-  /**
-   * Automatically disables every Premium-gated feature on a guild when its Premium expires or is revoked.
-   */
   disableGuildPremiumFeatures(state: PersistedDatabaseState, guildId: string): void {
     const nowIso = new Date().toISOString();
     const suite = Object.hasOwn(state.guildSecuritySuites, guildId)
@@ -1198,7 +961,6 @@ class AegisStore extends EventEmitter {
       changedCount += 1;
     }
 
-    // Also downgrade any orphaned guildPlan whose own expiresAt elapsed
     for (const [gid, plan] of Object.entries(state.guildPlans)) {
       if (
         isPaidTier(normalizePlanTier(plan.tier)) &&
@@ -1232,7 +994,6 @@ class AegisStore extends EventEmitter {
     const nextSub = applyAccumulatedPremium(existing, params);
     state.userSubscriptions[params.discordId] = nextSub;
 
-    // Sync any currently slotted guilds for this user with the updated tier & accumulated expiration
     for (const gid of nextSub.activatedGuildIds) {
       if (Object.hasOwn(state.guildPlans, gid)) {
         state.guildPlans[gid] = {
@@ -1382,7 +1143,9 @@ class AegisStore extends EventEmitter {
   assignGuildPremiumSlot(
     state: PersistedDatabaseState,
     params: { discordId: string; guildId: string; username: string }
-  ): { ok: true; plan: GuildPlanRecord; subscription: UserPremiumSubscription } | { ok: false; status: number; message: string } {
+  ):
+    | { ok: true; plan: GuildPlanRecord; subscription: UserPremiumSubscription }
+    | { ok: false; status: number; message: string } {
     const sub = Object.hasOwn(state.userSubscriptions, params.discordId)
       ? state.userSubscriptions[params.discordId]
       : undefined;
@@ -1391,7 +1154,8 @@ class AegisStore extends EventEmitter {
       return {
         ok: false,
         status: 402,
-        message: 'No tienes una suscripción Premium activa. Canjea un código o solicita activación al Staff.',
+        message:
+          'No tienes una suscripción Premium activa. Canjea un código o solicita activación al Staff.',
       };
     }
 
@@ -1473,14 +1237,21 @@ class AegisStore extends EventEmitter {
       ? state.guildPlans[params.guildId]
       : undefined;
 
-    if (currentPlan?.ownerUserId && Object.hasOwn(state.userSubscriptions, currentPlan.ownerUserId)) {
+    if (
+      currentPlan?.ownerUserId &&
+      Object.hasOwn(state.userSubscriptions, currentPlan.ownerUserId)
+    ) {
       const ownerSub = state.userSubscriptions[currentPlan.ownerUserId];
-      ownerSub.activatedGuildIds = ownerSub.activatedGuildIds.filter((id) => id !== params.guildId);
+      ownerSub.activatedGuildIds = ownerSub.activatedGuildIds.filter(
+        (id) => id !== params.guildId
+      );
       ownerSub.updatedAt = new Date().toISOString();
     }
     if (Object.hasOwn(state.userSubscriptions, params.discordId)) {
       const callerSub = state.userSubscriptions[params.discordId];
-      callerSub.activatedGuildIds = callerSub.activatedGuildIds.filter((id) => id !== params.guildId);
+      callerSub.activatedGuildIds = callerSub.activatedGuildIds.filter(
+        (id) => id !== params.guildId
+      );
       callerSub.updatedAt = new Date().toISOString();
     }
 
@@ -1585,11 +1356,12 @@ class AegisStore extends EventEmitter {
     return createdCount;
   }
 
+  /**
+   * Pure read-only telemetry probe — NEVER initiates or spawns a Discord Gateway client.
+   */
   async getSystemHealth(): Promise<SystemHealthSnapshot> {
     const env = getServerEnv();
-    if (env.botConfigured) {
-      ensureBotStarted();
-    }
+    const telemetry = aegisTelemetry.getSnapshot();
 
     const withTimeout = <T>(p: Promise<T>, fallback: T, ms = 1200): Promise<T> =>
       Promise.race([
@@ -1614,6 +1386,10 @@ class AegisStore extends EventEmitter {
     let userCount: number | null = null;
     let shards: BotShardTelemetry[] = [];
     let cluster: BotClusterTelemetry | undefined;
+    let effectiveLatencyMetrics = {
+      antiRaidEval: telemetry.antiRaidEvalLatency,
+      sanctionExec: telemetry.sanctionExecLatency,
+    };
 
     const liveRunner = getLiveBotRunnerSnapshot();
     const redisHeartbeat =
@@ -1638,30 +1414,36 @@ class AegisStore extends EventEmitter {
       pingMs = redisHeartbeat.pingMs;
       guildCount = redisHeartbeat.guildCount;
       userCount = redisHeartbeat.userCount;
-      shards = [
-        {
-          id: 0,
-          clusterId: 1,
-          status: 'READY',
-          pingMs: redisHeartbeat.pingMs ?? 0,
-          guildCount: redisHeartbeat.guildCount ?? 0,
-          uptimeSeconds: Math.floor(process.uptime()),
-          memoryMb: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
-          eventThroughputPerSec: 0,
-        },
-      ];
-      cluster = {
+      if (redisHeartbeat.latencyMetrics) {
+        effectiveLatencyMetrics = redisHeartbeat.latencyMetrics;
+      }
+      shards =
+        redisHeartbeat.shards && redisHeartbeat.shards.length > 0
+          ? redisHeartbeat.shards
+          : [
+              {
+                id: 0,
+                clusterId: 1,
+                status: 'READY',
+                pingMs: redisHeartbeat.pingMs ?? 0,
+                guildCount: redisHeartbeat.guildCount ?? 0,
+                uptimeSeconds: Math.floor(process.uptime()),
+                memoryMb: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+                eventThroughputPerSec: telemetry.eventThroughputPerSec,
+              },
+            ];
+      cluster = redisHeartbeat.cluster ?? {
         clusterId: 1,
-        clusterName: 'Cluster-Alpha (Redis Synced Worker)',
-        totalShards: 1,
+        clusterName: 'Cluster-Alpha (Standalone Bot via Redis)',
+        totalShards: shards.length,
         mode: 'CLUSTERED_MULTI_WORKER',
-        workerPid: process.pid,
+        workerPid: redisHeartbeat.pid ?? process.pid,
         memoryMb: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
-        cpuPercent: 0,
+        cpuPercent: telemetry.cpuPercent,
         averagePingMs: redisHeartbeat.pingMs ?? 0,
-        status: 'OPTIMAL',
-        eventLoopLagMs: 0,
-        activeSockets: 1,
+        status: (redisHeartbeat.pingMs ?? 0) < 120 ? 'OPTIMAL' : 'HEALTHY',
+        eventLoopLagMs: telemetry.eventLoopLagMs,
+        activeSockets: shards.length,
         queueSize: 0,
       };
     } else if (env.botConfigured) {
@@ -1706,8 +1488,38 @@ class AegisStore extends EventEmitter {
       liveConnected: liveRunner.connected,
       redisOnline: Boolean(redisHeartbeat?.online),
       restOnline,
-      invalidToken: env.botConfigured && !liveRunner.connected && !redisHeartbeat?.online && !restOnline,
+      invalidToken:
+        env.botConfigured && !liveRunner.connected && !redisHeartbeat?.online && !restOnline,
     });
+
+    let outboxPendingCount = 0;
+    if (mongoStatus === 'CONNECTED') {
+      outboxPendingCount = await withTimeout(
+        SyncOutboxModel.countDocuments({ status: 'PENDING' }),
+        0,
+        600
+      );
+    }
+
+    const recentErrors = aegisLogger
+      .getRecentEntries({ level: 'ERROR', limit: 12 })
+      .map((entry, idx) => ({
+        id: `ERR-${idx + 1}-${entry.correlationId || 'sys'}`,
+        timestamp: entry.timestamp,
+        category: entry.category,
+        message: entry.message,
+        guildId: entry.guildId,
+        correlationId: entry.correlationId,
+      }));
+
+    const syncStatus: 'SYNCHRONIZED' | 'PENDING_SYNC' | 'SYNC_ERROR' | 'OFFLINE' =
+      botState === 'OFFLINE'
+        ? 'OFFLINE'
+        : outboxPendingCount > 0 || (env.redisConfigured && redisStatus !== 'CONNECTED')
+        ? 'PENDING_SYNC'
+        : mongoStatus === 'DEGRADED' || mongoStatus === 'OFFLINE'
+        ? 'SYNC_ERROR'
+        : 'SYNCHRONIZED';
 
     return {
       api: 'ONLINE',
@@ -1715,7 +1527,8 @@ class AegisStore extends EventEmitter {
       redis: redisStatus,
       bot: botState,
       degradedMode: botState !== 'ONLINE' || (env.redisConfigured && redisStatus !== 'CONNECTED'),
-      lastSynchronization: liveRunner.lastSlashSyncAt ?? this.lastSyncAt,
+      lastSynchronization:
+        redisHeartbeat?.lastSlashSyncAt ?? liveRunner.lastSlashSyncAt ?? this.lastSyncAt,
       l1CacheStats: this.l1Cache.getStats(),
       botIdentity: {
         configured: env.botConfigured,
@@ -1730,6 +1543,13 @@ class AegisStore extends EventEmitter {
       cluster,
       slashCommands: AEGIS_SLASH_COMMANDS_METADATA,
       oauthConfigured: env.oauthConfigured,
+      syncHealth: {
+        status: syncStatus,
+        lastReconcileAt: this.lastSyncAt,
+        pendingOutboxCount: outboxPendingCount,
+      },
+      latencyMetrics: effectiveLatencyMetrics,
+      recentErrors,
     };
   }
 
@@ -1740,259 +1560,12 @@ class AegisStore extends EventEmitter {
   ): Promise<OverviewAnalyticsResponse> {
     const state = await this.getState();
     const systemHealth = await this.getSystemHealth();
-
-    const periodHoursMap: Record<OverviewPeriod, number> = {
-      '24h': 24,
-      '7d': 24 * 7,
-      '30d': 24 * 30,
-      '90d': 24 * 90,
-    };
-    const hours = periodHoursMap[period];
-    const nowMs = Date.now();
-    const currentCutoff = nowMs - hours * 3600_000;
-    const prevCutoff = nowMs - hours * 2 * 3600_000;
-
-    const allowedSet = authorizedGuildIds ? new Set(authorizedGuildIds) : null;
-    const matchesScope = (targetGuildId: string) => {
-      if (guildId) return targetGuildId === guildId;
-      if (allowedSet) return allowedSet.has(targetGuildId);
-      return false;
-    };
-
-    const scopedIncidents = state.incidents.filter((i) => matchesScope(i.guildId));
-    const currentIncidents = scopedIncidents.filter(
-      (i) => new Date(i.createdAt).getTime() >= currentCutoff
-    );
-    const prevIncidents = scopedIncidents.filter((i) => {
-      const t = new Date(i.createdAt).getTime();
-      return t >= prevCutoff && t < currentCutoff;
-    });
-
-    const calcDelta = (curr: number, prev: number): number | null => {
-      if (prev === 0) return null;
-      return Number((((curr - prev) / prev) * 100).toFixed(1));
-    };
-
-    const isRaid = (t: SecurityIncidentRecord['threatType']) =>
-      t === 'JOIN_RAID' || t === 'COORDINATED_ACTIVITY';
-    const isMitigated = (s: IncidentStatus) => s === 'MITIGATED' || s === 'RESOLVED';
-
-    const currRaids = currentIncidents.filter((i) => isRaid(i.threatType)).length;
-    const prevRaids = prevIncidents.filter((i) => isRaid(i.threatType)).length;
-
-    const currPrevented = currentIncidents.filter((i) => isMitigated(i.status)).length;
-    const prevPrevented = prevIncidents.filter((i) => isMitigated(i.status)).length;
-
-    const currSuspicious = currentIncidents.filter(
-      (i) => i.threatType === 'SUSPICIOUS_ACCOUNT_WAVE' || i.threatType === 'BOT_INFILTRATION'
-    ).length;
-    const prevSuspicious = prevIncidents.filter(
-      (i) => i.threatType === 'SUSPICIOUS_ACCOUNT_WAVE' || i.threatType === 'BOT_INFILTRATION'
-    ).length;
-
-    const currCritical = currentIncidents.filter((i) => i.riskLevel === 'CRITICAL').length;
-    const prevCritical = prevIncidents.filter((i) => i.riskLevel === 'CRITICAL').length;
-
-    const scopedQuarantines = state.quarantines.filter((q) => matchesScope(q.guildId));
-    const activeQuarantined = scopedQuarantines.filter((q) => q.status === 'ACTIVE').length;
-    const prevQuarantined = scopedQuarantines.filter((q) => {
-      const t = new Date(q.createdAt).getTime();
-      return t >= prevCutoff && t < currentCutoff;
-    }).length;
-
-    const scopedGuilds = Object.values(state.guilds).filter((g) => matchesScope(g.guildId));
-    const activeGuilds = scopedGuilds.filter(
-      (g) => g.protectionEnabled && g.botStatus === 'BOT_CONNECTED'
-    ).length;
-
-    const bucketCount = period === '24h' ? 8 : period === '7d' ? 7 : period === '30d' ? 10 : 12;
-    const bucketMs = (hours * 3600_000) / bucketCount;
-    const securityActivity = Array.from({ length: bucketCount }, (_, idx) => {
-      const bucketStart = currentCutoff + idx * bucketMs;
-      const bucketEnd = bucketStart + bucketMs;
-      const dt = new Date(bucketEnd);
-      const label =
-        period === '24h'
-          ? `${String(dt.getHours()).padStart(2, '0')}:00`
-          : `${dt.getDate()}/${dt.getMonth() + 1}`;
-
-      const isLastBucket = idx === bucketCount - 1;
-      const inBucket = currentIncidents.filter((inc) => {
-        const ts = new Date(inc.createdAt).getTime();
-        return ts >= bucketStart && (isLastBucket ? ts <= bucketEnd : ts < bucketEnd);
-      });
-
-      return {
-        label,
-        detectedRaids: inBucket.filter((i) => isRaid(i.threatType)).length,
-        preventedAttacks: inBucket.filter((i) => isMitigated(i.status)).length,
-        suspiciousJoins: inBucket.filter(
-          (i) =>
-            i.threatType === 'SUSPICIOUS_ACCOUNT_WAVE' ||
-            i.threatType === 'BOT_INFILTRATION'
-        ).length,
-        criticalEvents: inBucket.filter((i) => i.riskLevel === 'CRITICAL').length,
-      };
-    });
-
-    const raidAttemptsCount = currentIncidents.filter((i) => isRaid(i.threatType)).length;
-    const suspiciousAccountsCount = currentIncidents.filter(
-      (i) => i.threatType === 'SUSPICIOUS_ACCOUNT_WAVE' || i.threatType === 'BOT_INFILTRATION'
-    ).length;
-    const quarantinedUsersCount = scopedQuarantines.filter(
-      (q) => new Date(q.createdAt).getTime() >= currentCutoff
-    ).length;
-
-    const totalDist = Math.max(
-      1,
-      raidAttemptsCount + suspiciousAccountsCount + quarantinedUsersCount
-    );
-
-    const toPct = (c: number) => Number(((c / totalDist) * 100).toFixed(1));
-
-    return {
-      period,
-      metrics: {
-        totalRaidsDetected: {
-          key: 'totalRaidsDetected',
-          value: currRaids,
-          deltaPercent: calcDelta(currRaids, prevRaids),
-          comparisonNote: `${prevRaids} vs ${period}`,
-        },
-        attacksPrevented: {
-          key: 'attacksPrevented',
-          value: currPrevented,
-          deltaPercent: calcDelta(currPrevented, prevPrevented),
-          comparisonNote: `${prevPrevented} vs ${period}`,
-        },
-        suspiciousJoins: {
-          key: 'suspiciousJoins',
-          value: currSuspicious,
-          deltaPercent: calcDelta(currSuspicious, prevSuspicious),
-          comparisonNote: `${prevSuspicious} vs ${period}`,
-        },
-        criticalIncidents: {
-          key: 'criticalIncidents',
-          value: currCritical,
-          deltaPercent: calcDelta(currCritical, prevCritical),
-          comparisonNote: `${prevCritical} vs ${period}`,
-        },
-        usersQuarantined: {
-          key: 'usersQuarantined',
-          value: activeQuarantined,
-          deltaPercent: calcDelta(activeQuarantined, prevQuarantined),
-          comparisonNote: `${scopedQuarantines.length} registros`,
-        },
-        activeProtection: {
-          key: 'activeProtection',
-          value: activeGuilds,
-          deltaPercent: null,
-          comparisonNote: `${scopedGuilds.length} servidor(es)`,
-        },
-        globalBansApplied: {
-          key: 'globalBansApplied',
-          value: 0,
-          deltaPercent: null,
-          comparisonNote: '',
-        },
-        participatingServers: {
-          key: 'participatingServers',
-          value: 0,
-          deltaPercent: null,
-          comparisonNote: '',
-        },
-      },
-      securityActivity,
-      threatDistribution: [
-        {
-          key: 'RAID_ATTEMPTS',
-          count: raidAttemptsCount,
-          percentage: toPct(raidAttemptsCount),
-        },
-        {
-          key: 'SUSPICIOUS_ACCOUNTS',
-          count: suspiciousAccountsCount,
-          percentage: toPct(suspiciousAccountsCount),
-        },
-        {
-          key: 'QUARANTINED_USERS',
-          count: quarantinedUsersCount,
-          percentage: toPct(quarantinedUsersCount),
-        },
-      ],
-      recentIncidents: scopedIncidents.slice(0, 20),
-      systemHealth,
-    };
+    return computeOverviewAnalytics(state, systemHealth, period, guildId, authorizedGuildIds);
   }
 
   async buildGlobalBanAnalytics(): Promise<GlobalBanAnalyticsResponse> {
     const state = await this.getState();
-    const now = Date.now();
-    const weekMs = 7 * 86_400_000;
-    const monthAgo = now - 30 * 86_400_000;
-
-    const active = state.globalBans.filter((b) => b.status === 'ACTIVE');
-    const permanent = state.globalBans.filter((b) => b.sanctionType === 'PERMANENT');
-    const temporary = state.globalBans.filter((b) => b.sanctionType === 'TEMPORARY');
-    const expiringSoon = active.filter(
-      (b) => b.expiresAt && new Date(b.expiresAt).getTime() - now <= weekMs
-    );
-    const thisMonth = state.globalBans.filter(
-      (b) => new Date(b.createdAt).getTime() >= monthAgo
-    );
-
-    const activitySeries = Array.from({ length: 6 }, (_, idx) => {
-      const sliceDays = 30 - idx * 5;
-      const start = now - sliceDays * 86_400_000;
-      const end = now - (sliceDays - 5) * 86_400_000;
-      const dt = new Date(end);
-      const label = `${dt.getMonth() + 1}/${dt.getDate()}`;
-      return {
-        label,
-        created: state.globalBans.filter((b) => {
-          const t = new Date(b.createdAt).getTime();
-          return t >= start && t < end;
-        }).length,
-        revoked: state.globalBans.filter((b) => {
-          if (!b.revokedAt) return false;
-          const t = new Date(b.revokedAt).getTime();
-          return t >= start && t < end;
-        }).length,
-        expired: state.globalBans.filter((b) => {
-          if (b.status !== 'EXPIRED' || !b.expiresAt) return false;
-          const t = new Date(b.expiresAt).getTime();
-          return t >= start && t < end;
-        }).length,
-      };
-    });
-
-    return {
-      cards: {
-        totalGlobalBans: state.globalBans.length,
-        activeSanctions: active.length,
-        permanentBans: permanent.length,
-        temporaryBans: temporary.length,
-        pendingAppeals: state.appeals.filter(
-          (a) => a.status === 'PENDING' || a.status === 'REVIEWING'
-        ).length,
-        participatingServers: Object.values(state.participatingServers).filter(
-          (p) => p.globalBanEnabled
-        ).length,
-        expiringSoon: expiringSoon.length,
-        sanctionsThisMonth: thisMonth.length,
-      },
-      activitySeries,
-      typeBreakdown: {
-        permanent: permanent.length,
-        temporary: temporary.length,
-      },
-      appealsBreakdown: {
-        pending: state.appeals.filter((a) => a.status === 'PENDING').length,
-        reviewing: state.appeals.filter((a) => a.status === 'REVIEWING').length,
-        approved: state.appeals.filter((a) => a.status === 'APPROVED').length,
-        rejected: state.appeals.filter((a) => a.status === 'REJECTED').length,
-      },
-    };
+    return computeGlobalBanAnalytics(state);
   }
 }
 

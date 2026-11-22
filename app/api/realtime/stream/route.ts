@@ -1,7 +1,9 @@
 import { NextRequest } from 'next/server';
 import { isUserAuthorizedForGuildCollection, requireAuthenticatedUser } from '@/lib/server/auth-guard';
-import { aegisStore } from '@/lib/server/store';
+import { getServerEnv } from '@/lib/server/env';
+import { aegisLogger } from '@/lib/server/logger';
 import { redisCoordinator } from '@/lib/server/redis';
+import { aegisStore } from '@/lib/server/store';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,6 +14,7 @@ export async function GET(req: NextRequest) {
 
   const encoder = new TextEncoder();
   const { user } = auth.ctx;
+  const env = getServerEnv();
 
   const stream = new ReadableStream({
     start(controller) {
@@ -50,6 +53,27 @@ export async function GET(req: NextRequest) {
 
       const unsubRedis = redisCoordinator.subscribe((msg) => {
         if (msg.originProcessId && msg.originProcessId === aegisStore.instanceId) {
+          return;
+        }
+        if (env.mongodbConfigured && msg.guildId) {
+          void aegisStore
+            .reconcileGuildConfigsFromMongo(msg.guildId)
+            .catch((err) =>
+              aegisLogger.warn('SYNC', 'SSE targeted guild reconciliation failed', {
+                guildId: msg.guildId,
+                meta: { err },
+              })
+            )
+            .finally(() => {
+              const liveState = aegisStore.getHotStateSync();
+              if (
+                msg.guildId &&
+                !isUserAuthorizedForGuildCollection(liveState, user, msg.guildId)
+              ) {
+                return;
+              }
+              send('aegis_update', msg);
+            });
           return;
         }
         aegisStore.reloadFromDiskIfNewer();

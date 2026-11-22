@@ -28,6 +28,8 @@ export function buildAegisSlashCommands() {
             .setDescription('Nivel de sensibilidad del motor')
             .setRequired(true)
             .addChoices(
+              { name: '👁️ Observación (MONITORING — solo registrar)', value: 'MONITORING' },
+              { name: '🔔 Solo Alerta (ALERT_ONLY — sin sanciones)', value: 'ALERT_ONLY' },
               { name: '🟢 Normal (Equilibrado)', value: 'NORMAL' },
               { name: '🟠 Estricto (Alta sensibilidad)', value: 'STRICT' },
               { name: '🔴 Emergencia (Tolerancia cero)', value: 'EMERGENCY' }

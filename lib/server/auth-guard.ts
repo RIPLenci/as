@@ -90,6 +90,54 @@ export async function requireAuthenticatedUser(
   return { ok: true, ctx: { session, user, state } };
 }
 
+/**
+ * Mitigates Cross-Site Request Forgery when cookies use SameSite=None (required by iframe preview).
+ * Allows Bearer token calls, same-origin requests, and direct API clients without Origin;
+ * blocks cross-site browser requests whose Origin/Sec-Fetch-Site mismatches host/appUrl.
+ */
+export function verifyMutationOrigin(req: Request): NextResponse | null {
+  const authHeader = req.headers.get('authorization');
+  if (authHeader && authHeader.toLowerCase().startsWith('bearer ')) {
+    return null;
+  }
+
+  const secFetchSite = req.headers.get('sec-fetch-site');
+  if (secFetchSite === 'cross-site') {
+    return NextResponse.json(
+      { error: 'CSRF_BLOCKED', message: 'Solicitud cross-site bloqueada por política de origen.' },
+      { status: 403 }
+    );
+  }
+
+  const origin = req.headers.get('origin');
+  if (!origin) return null;
+
+  try {
+    const originHost = new URL(origin).host.toLowerCase();
+    const expectedHosts = new Set<string>();
+    const hostHeader = req.headers.get('x-forwarded-host') || req.headers.get('host');
+    if (hostHeader) {
+      expectedHosts.add(hostHeader.split(',')[0].trim().toLowerCase());
+    }
+    const env = getServerEnv();
+    if (env.appUrl) {
+      expectedHosts.add(new URL(env.appUrl).host.toLowerCase());
+    }
+    if (expectedHosts.size > 0 && !expectedHosts.has(originHost)) {
+      return NextResponse.json(
+        { error: 'CSRF_BLOCKED', message: 'Origen de solicitud no autorizado.' },
+        { status: 403 }
+      );
+    }
+  } catch {
+    return NextResponse.json(
+      { error: 'CSRF_BLOCKED', message: 'Cabecera Origin inválida.' },
+      { status: 403 }
+    );
+  }
+  return null;
+}
+
 export function isBotStaff(user: Pick<UserRecord, 'discordId' | 'globalRole'>): boolean {
   const env = getServerEnv();
   return (

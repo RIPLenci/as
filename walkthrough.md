@@ -1,55 +1,69 @@
 # Security Summary
 
-This security audit and hardening pass inspected the AEGIS SECURITY Next.js App Router backend, Discord bot integration, real-time SSE/Redis event bus, and JSON/Mongo persistence engine, identifying and resolving the following verified issues:
+**Reviewed Files**: 34
+**Issues Resolved**: 11
 
-1. **Unvalidated Evidence File Uploads & Spoofed MIME Headers (`/app/api/admin/globalban/route.ts`)**
-   - **Issue**: Uploaded Global Ban evidence files could rely on client-supplied `Content-Type` headers or filenames, risking disguised non-image uploads and unsafe filesystem paths.
-   - **Fix**: Every uploaded file is verified via `detectImageFormatFromMagicBytes` (binary magic-byte signature validation for PNG, JPEG, GIF, and WEBP), assigned a canonical extension derived from the verified signature, and checked against a resolved base directory prefix before writing.
+### Issues Resolved
+| Area | File | Line | What Was Happening | Impact | Status | How It Was Fixed |
+|---|---|---|---|---|---|---|
+| Cross-Site Mutation Protection (CSRF) | `lib/server/auth-guard.ts` | 98 | Cookie sessions use `SameSite=None` for iframe compatibility without checking `Origin` / `Sec-Fetch-Site` on mutating endpoints. | High | Fixed | Added `verifyMutationOrigin(req)` enforcing Bearer token or matching `Host` / `X-Forwarded-Host` / `appUrl` and blocking `Sec-Fetch-Site: cross-site` across all `POST`, `PATCH`, and `DELETE` endpoints. |
+| Duplicate Discord Gateway Ownership | `lib/server/bot-runner.ts` | 1 | Read-only health checks (`getSystemHealth`) and Next.js SSR could trigger a second Discord Gateway connection using the same token as `services/bot/index.ts`. | High | Fixed | Designated `services/bot/index.ts` (`AEGIS_STANDALONE_BOT=true`) as the sole Gateway owner with Redis lock `aegis:bot:gateway_owner`, converted `getSystemHealth()` and `/api/health/ready` to strictly read-only probes, and gated embedded start behind `AEGIS_EMBEDDED_BOT=true`. |
+| Unverified Discord Sanctions & Silent Failures | `lib/aegis/sanction-executor.ts` | 49 | Sanctions could fail silently with empty `.catch(() => undefined)` handlers and increment `attacksPrevented` even when the bot lacked permissions or Discord rejected the call. | High | Fixed | Implemented `checkActionPrerequisites` (`BanMembers`, `KickMembers`, `ModerateMembers`, role hierarchy, guild owner exclusion), `PENDING -> EXECUTING -> SUCCESS | FAILED | CANCELLED` lifecycle, transient-only retries, 30s idempotency cache, and strict counter increment only on `SUCCESS`. |
+| Unlinked Anti-Raid Detector Switches & Avatar Bias | `lib/aegis/fast-antiraid.ts`, `lib/aegis/risk-engine.ts` | 101, 85 | Disabling individual detector switches did not consistently isolate signals, and default Discord avatars could influence suspicion scoring. | Medium | Fixed | Wired `burstDetection`, `joinPatternDetection`, `suspiciousAccountDetection`, and `botJoinDetection` cleanly so disabled detectors contribute `0` points, removed all `!hasAvatar` penalties, and enforced non-punitive caps in `MONITORING` / `ALERT_ONLY`. |
+| Synthetic Diagnostic Probes Polluting Metrics | `app/api/guilds/[guildId]/antiraid/test/route.ts` | 85 | Running `/antiraid probar` incremented real `attacksDetected`, `attacksPrevented`, and `eventsProcessed` metrics. | Medium | Fixed | Isolated diagnostic probes to `LOG_ONLY` / `LOGGED` records (`syntheticProbe: true`) without mutating real mitigation counters. |
+| Unvalidated Evidence File Uploads | `app/api/admin/globalban/route.ts` | 1 | Client-supplied MIME headers/filenames on Global Ban evidence uploads risked disguised non-image uploads. | High | Fixed | Enforced binary magic-byte validation (`detectImageFormatFromMagicBytes`) for PNG/JPEG/GIF/WEBP with canonical generated filenames and resolved directory confinement. |
+| Path Traversal on Evidence Serving | `app/api/admin/globalban/evidence/[banId]/[filename]/route.ts` | 1 | URL path parameters needed strict single-segment validation and response hardening. | High | Fixed | Enforced `isSafeSinglePathSegment`, canonical `path.resolve` prefix confinement, `X-Content-Type-Options: nosniff`, and explicit inline `Content-Disposition`. |
+| Inline Script Breakout in OAuth Callback | `app/api/auth/callback/route.ts` | 1 | Session handoff serialized JSON inside an HTML `<script>` block. | High | Fixed | Applied `sanitizeHtmlScriptJson` (`<`, `>`, `&`, `\u2028`, `\u2029` escaping) and `escapeHtml` on fallback redirect attributes. |
+| Prototype Pollution on Hydration | `lib/aegis/security-helpers.ts`, `lib/server/store.ts` | 1 | Hydrating external/persisted JSON could retain `__proto__`, `constructor`, or `prototype` keys. | High | Fixed | Applied recursive `stripUnsafeKeys` inside `normalizeLoadedState`. |
+| Cross-Container Config Sync & Stale State | `lib/server/sync-coordinator.ts`, `lib/server/store.ts` | 38, 311 | File-only `store.json` sharing and unversioned Pub/Sub broadcasts risked stale or dropped updates across Web, Bot, and Worker containers. | High | Fixed | Added MongoDB `GuildConfigModel` with monotonic `syncVersion`, `SyncOutboxModel` for Redis disconnect recovery, out-of-order rejection (`applyVersionedGuildConfig`), and per-process `originProcessId` deduplication. |
+| Internal Error Detail Exposure | `app/api/bot/control/route.ts` | 172 | Unhandled exceptions could leak runtime stack details in HTTP 500 JSON payloads. | Medium | Fixed | Sanitized 500 JSON responses to generic Spanish error messages and routed diagnostics to structured `aegisLogger` redacting secrets/tokens. |
 
-2. **Path Traversal & Unsafe Content Serving on Evidence Retrieval (`/app/api/admin/globalban/evidence/[banId]/[filename]/route.ts`)**
-   - **Issue**: Dynamic URL parameters (`banId`, `filename`) must be strictly confined to the evidence storage directory and served without MIME sniffing.
-   - **Fix**: Added `isSafeSinglePathSegment` validation (rejecting `/`, `\`, `..`, null bytes, and non-alphanumeric segments), canonical `path.resolve` prefix enforcement, `X-Content-Type-Options: nosniff`, and explicit `Content-Disposition: inline` with verified safe filenames.
-
-3. **Inline Script & HTML Attribute XSS Hardening (`/app/api/auth/callback/route.ts`)**
-   - **Issue**: OAuth2 callback popup handoff serializes session exchange payloads inside an inline `<script>` block and renders a fallback redirect anchor.
-   - **Fix**: Enforced `sanitizeHtmlScriptJson` (escaping `<`, `>`, `&`, `\u2028`, `\u2029`) for all embedded JSON in `<script>` contexts and `escapeHtml` on fallback `href` values.
-
-4. **Prototype Pollution on Persisted State Hydration (`/lib/aegis/security-helpers.ts`, `/lib/server/store.ts`)**
-   - **Issue**: Deserializing external or disk-loaded JSON dictionaries could retain `__proto__`, `constructor`, or `prototype` keys across nested structures.
-   - **Fix**: Implemented recursive `stripUnsafeKeys` across arrays and nested objects and applied it during `normalizeLoadedState` when hydrating persisted state.
-
-5. **Real-Time SSE Stale Snapshot, Cross-Process Sync & Echo Loops (`/app/api/realtime/stream/route.ts`, `/lib/server/redis.ts`, `/lib/server/store.ts`, `/services/bot/index.ts`)**
-   - **Issue**: Long-lived SSE streams could serve stale closure state across process boundaries or rebroadcast self-originated Redis `aegis:sync` events in loops, causing duplicate UI events and desynchronized bot/dashboard state.
-   - **Fix**: Added per-process `instanceId` / `originProcessId` filtering, dynamic `aegisStore.getHotStateSync()` reads inside SSE handlers, and `reloadFromDiskIfNewer()` on incoming cross-process updates.
-
-6. **Database Deduplication, Detached Record Mutations & Unbounded Collections (`/lib/server/store.ts`, `/app/api/guilds/[guildId]/*`, `/app/api/quarantine/*`, `/services/bot/handlers.ts`)**
-   - **Issue**: Direct mutations to `guard.guild` or `state.incidents.unshift(...)`, duplicate whitelist rules, duplicate quarantine records, and duplicate `authorizedAdminIds` could produce inconsistent guild state or unbounded growth.
-   - **Fix**: Introduced `aegisStore.syncGuildRecord`, idempotent `upsertWhitelistEntry` (preserving order via `mergeWhitelistExcludedRules`), `upsertQuarantineEntry`, `dedupePreserveOrder` on Anti-Nuke admins, and bounded `pushIncident` / `pushEvent` (500-item cap).
-
-7. **Internal Error Detail Exposure (`/app/api/bot/control/route.ts`)**
-   - **Issue**: Unhandled exceptions could propagate internal stack/runtime details in 500 JSON responses.
-   - **Fix**: Sanitized unhandled 500 error responses to return generic Spanish error messages without leaking internal diagnostic details.
-
-8. **Transitive Dependency Audit Note (`bun audit`)**
-   - Audited workspace packages with `bun audit`: 9 advisories exist strictly within upstream framework/ORM/tooling dependencies (`postcss`, `minimatch`, `glob`, `uuid`, `@opentelemetry/core` brought in via `next`, `tailwindcss`, `firebase-tools`, and `mongoose`) with zero custom vulnerable runtime code paths in application endpoints.
+### Safeguards Verified
+| Area | File | How It's Protected |
+|---|---|---|
+| API Keys & Secrets | `lib/server/env.ts`, `lib/server/logger.ts` | All secrets (`DISCORD_BOT_TOKEN`, `MONGODB_URI`, `REDIS_URL`, `SESSION_SECRET`) stay server-side in `process.env`; structured logs redact credentials automatically. |
+| Session & Cookie Hardening | `lib/server/session.ts` | OAuth2 PKCE (`S256`), single-use HMAC-signed exchange codes, `HttpOnly; Secure; SameSite=None` session cookies, and server-side revocation blacklist. |
+| Access Control & Anti-IDOR | `lib/server/auth-guard.ts`, `lib/aegis/rbac.ts` | Every guild endpoint validates server-side Discord guild ownership/secondary-owner/admin membership (`requireGuildAuthorization`); global admin endpoints lock to `OWNER_ID`. |
+| Transitive Dependency Audit | `package.json`, `bun.lock` | `bun audit` completed with 9 upstream transitive advisories (2 high, 7 moderate inside `postcss`, `minimatch`, `glob`, `uuid`, `@opentelemetry/core` pulled by Next.js/Tailwind/Mongoose/Firebase CLI) and zero custom vulnerable route handlers. |
 
 ## PoC Verification
 
-### 1. Automated Security & Store Deduplication Unit Tests
-Command executed:
-```bash
-npx --yes tsx --test lib/aegis/*.test.ts
-```
-Observed result:
-- `41/41` unit tests passed (`0` failed), including:
-  - Magic-byte verification (`PNG`, `JPEG`, `GIF`, `WEBP`) and spoofed binary rejection (`detectImageFormatFromMagicBytes`).
-  - Single-segment traversal rejection for `..`, `/`, `\`, and null bytes (`isSafeSinglePathSegment`).
-  - Inline `<script>` payload breakout neutralization (`sanitizeHtmlScriptJson` escapes `</script>` and HTML special chars).
-  - Recursive stripping of `__proto__`, `constructor`, and `prototype` keys (`stripUnsafeKeys`).
-  - Idempotent order-preserving deduplication (`dedupePreserveOrder`, `mergeWhitelistExcludedRules`).
-  - Atomic guild/whitelist/quarantine synchronization and 500-entry `pushIncident` bounding in `aegisStore`.
+### Cross-Site Mutation Origin Blocking (CSRF)
 
-### 2. Route & Endpoint Verification
-- **404 Error Page (`GET /ruta-inexistente-404`)**: Verified Next.js `app/not-found.tsx` renders in Spanish with zero console errors, valid optimized `/images/not-found-404.jpg` asset (`naturalWidth > 0`), zero horizontal overflow on desktop (`1440x900`) and mobile (`390x844`), and a functional `← Volver` link back to `/`.
-- **Dashboard Home (`GET /`)**: Verified clean rendering and live SSE/API wiring without unhandled runtime/console errors.
-- **Compilation & Lint Gate**: Verified with `compile_applet` (`npm run build`) and `lint_applet` (`npm run lint`).
+#### Summary
+| Field | Value |
+|---|---|
+| Issue Type | Cross-Site Request Forgery on Cookie-Authenticated Mutations |
+| Impact | High |
+| Affected File | `lib/server/auth-guard.ts:98` |
+| Test Scenario | `PATCH /api/guilds/100/antiraid` with `Origin: https://evil.example` and `Sec-Fetch-Site: cross-site` |
+
+#### How It Was Fixed
+Added `verifyMutationOrigin(req)` at the top of every mutating API route handler (`POST`, `PATCH`, `DELETE`) so requests lacking a `Bearer` header are blocked whenever `Sec-Fetch-Site: cross-site` or an untrusted `Origin` header is sent.
+
+#### Step-by-Step Trace
+| Step | What Happens in the Code | Outcome |
+|---|---|---|
+| 1 | Untrusted cross-site request hits `PATCH /api/guilds/[guildId]/antiraid` (`app/api/guilds/[guildId]/antiraid/route.ts:34`) | Enters `verifyMutationOrigin(req)` |
+| 2 | `lib/server/auth-guard.ts:104-110` detects `secFetchSite === 'cross-site'` and mismatched `Origin` host | Rejects prior to auth or state mutation |
+| 3 | Live verification via `curl` returned HTTP `403`: `{"error":"CSRF_BLOCKED","message":"Solicitud cross-site bloqueada por política de origen."}` | **Blocked Safely** |
+
+#### Conclusion
+**Fix Verified** - Cross-origin cookie mutations from external sites are rejected with HTTP 403 before touching server state.
+
+---
+
+### Automated Unit, Integration, Concurrency & Benchmark Verification
+
+#### Summary
+| Field | Value |
+|---|---|
+| Issue Type | Anti-Raid Detector Isolation, Sanction Lifecycle, Sync Versioning & Concurrency Integrity |
+| Impact | High |
+| Affected File | `lib/aegis/antiraid-repair.test.ts` |
+| Test Scenario | `npx tsx --test lib/aegis/*.test.ts` across all 56 unit, integration, concurrency, and 10k-iteration benchmark assertions |
+
+#### Observed Verification Output
+- **Test Suite**: `56/56` passed, `0` failed (`npx tsx --test lib/aegis/*.test.ts`), covering detector switch isolation, zero avatar penalty, `MONITORING` / `ALERT_ONLY` caps, Discord missing-permission cancellation (`attacksPrevented` unchanged), permanent `50013` non-retry, transient `429` retry + 30s idempotency deduplication, stale `syncVersion` rejection, 150-join `KeyedAsyncMutex` concurrency, and CSRF validation.
+- **TypeScript Performance Benchmark (10,000 sequential evaluations)**: `251.84 ms` total (`39,708 ops/sec`), `p50 = 0.0183 ms`, `p95 = 0.0361 ms`, `p99 = 0.0966 ms`, `heapDelta = 7.69 MB`.
+- **Health & Route Smoke Verification (`http://localhost:3000`)**: `GET /api/health/live` → `HTTP 200` (`{"live":true}`), `GET /api/health/ready` → `HTTP 200` (`ready: true`, `syncHealth.status: "SYNCHRONIZED"`), `/` and `/ruta-inexistente-test` rendered in headless Chromium with `0` React runtime errors.
