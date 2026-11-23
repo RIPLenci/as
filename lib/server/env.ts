@@ -144,6 +144,7 @@ export function resolveCallbackUrl(params: {
 export function getServerEnv() {
   const appUrl = (
     process.env.APP_URL ||
+    process.env.NEXT_PUBLIC_APP_URL ||
     process.env.DASHBOARD_URL ||
     'http://localhost:3000'
   ).replace(/\/+$/, '');
@@ -158,8 +159,30 @@ export function getServerEnv() {
   const mongodbUri = (process.env.MONGODB_URI || '').trim();
   const redisUrl = (process.env.REDIS_URL || '').trim();
   const sessionSecret = (process.env.SESSION_SECRET || '').trim() || getOrGenerateRuntimeSecret();
-  const ownerIds = parseCsvIds(process.env.OWNER_IDS);
+  const ownerIds = Array.from(
+    new Set([
+      ...parseCsvIds(process.env.OWNER_IDS),
+      ...parseCsvIds(process.env.AEGIS_OWNER_DISCORD_ID),
+    ])
+  );
   const globalAdminIds = parseCsvIds(process.env.GLOBAL_ADMIN_IDS);
+  const standaloneBot = process.env.AEGIS_STANDALONE_BOT === 'true';
+  const embeddedBot = process.env.AEGIS_EMBEDDED_BOT === 'true';
+  const requireDistributedLock =
+    process.env.AEGIS_REQUIRE_DISTRIBUTED_LOCK === 'true' || Boolean(redisUrl);
+  const localSingleInstance =
+    process.env.AEGIS_LOCAL_SINGLE_INSTANCE === 'true' ||
+    (!redisUrl && process.env.AEGIS_REQUIRE_DISTRIBUTED_LOCK !== 'true');
+  const parsedWorkerConc = Number.parseInt(process.env.WORKER_MAX_CONCURRENCY || '4', 10);
+  const workerMaxConcurrency =
+    Number.isFinite(parsedWorkerConc) && parsedWorkerConc >= 1 && parsedWorkerConc <= 32
+      ? parsedWorkerConc
+      : 4;
+  const parsedWorkerInterval = Number.parseInt(process.env.WORKER_INTERVAL_MS || '60000', 10);
+  const workerIntervalMs =
+    Number.isFinite(parsedWorkerInterval) && parsedWorkerInterval >= 5000
+      ? parsedWorkerInterval
+      : 60_000;
 
   return {
     nodeEnv: process.env.NODE_ENV || 'development',
@@ -174,6 +197,12 @@ export function getServerEnv() {
     sessionSecret,
     ownerIds,
     globalAdminIds,
+    standaloneBot,
+    embeddedBot,
+    requireDistributedLock,
+    localSingleInstance,
+    workerMaxConcurrency,
+    workerIntervalMs,
     oauthConfigured: Boolean(discordClientId && discordClientSecret),
     botConfigured: Boolean(discordBotToken),
     mongodbConfigured: Boolean(mongodbUri),

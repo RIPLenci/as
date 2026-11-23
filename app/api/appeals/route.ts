@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { appealCreateSchema } from '@/lib/aegis/validators';
 import { requireSuperOwner } from '@/lib/server/auth-guard';
+import { enforceRateLimit } from '@/lib/server/rate-limit';
 import { aegisStore } from '@/lib/server/store';
 
 export async function GET() {
@@ -17,6 +18,14 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const auth = await requireSuperOwner();
   if (!auth.ok) return auth.response;
+
+  const rlErr = await enforceRateLimit(req, {
+    bucket: 'appeals_submit',
+    userId: auth.ctx.user.id,
+    limit: 15,
+    windowSeconds: 60,
+  });
+  if (rlErr) return rlErr;
 
   const body = await req.json().catch(() => null);
   const parsed = appealCreateSchema.safeParse(body);
@@ -121,6 +130,11 @@ export async function POST(req: NextRequest) {
     metadata: { banId: appeal.banId },
   });
 
-  await aegisStore.commitMutation('appeal:submitted', undefined, { appeal });
+  await aegisStore.commitMutation(
+    'appeal:submitted',
+    undefined,
+    { appeal },
+    { globalBanRecord: ban }
+  );
   return NextResponse.json({ appeal }, { status: 201 });
 }

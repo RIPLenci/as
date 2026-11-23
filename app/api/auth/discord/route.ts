@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { buildDiscordOAuthUrl } from '@/lib/server/discord-api';
 import { getServerEnv, normalizeOrigin, resolveCallbackUrl } from '@/lib/server/env';
+import { enforceRateLimit } from '@/lib/server/rate-limit';
 import {
   generatePkcePair,
   generateRandomState,
@@ -12,7 +13,14 @@ import {
 
 export const dynamic = 'force-dynamic';
 
-function createOAuthResponse(req: NextRequest, allowDirectRedirect: boolean) {
+async function createOAuthResponse(req: NextRequest, allowDirectRedirect: boolean) {
+  const rlErr = await enforceRateLimit(req, {
+    bucket: 'oauth_init',
+    limit: 30,
+    windowSeconds: 60,
+  });
+  if (rlErr) return rlErr;
+
   const env = getServerEnv();
   const explicitOrigin = req.nextUrl.searchParams.get('origin');
   const refererOrigin = normalizeOrigin(req.headers.get('referer'));
@@ -49,10 +57,9 @@ function createOAuthResponse(req: NextRequest, allowDirectRedirect: boolean) {
     redirectUri,
   });
 
-  // Persist pending PKCE verifier & redirectUri server-side (single-use, 10m TTL)
-  // so OAuth state verification succeeds even when AI Studio iframe cookies partition
-  // separately from the top-level OAuth popup window.
-  savePendingOAuthState({
+  // Persist pending PKCE verifier & redirectUri in shared Redis (single-use, 10m TTL)
+  // so OAuth state verification works across containers and iframe cookie partitioning.
+  await savePendingOAuthState({
     state,
     codeVerifier,
     redirectUri,

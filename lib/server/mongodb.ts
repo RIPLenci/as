@@ -11,6 +11,8 @@ const genericJsonSchema = new Schema(
   {
     key: { type: String, required: true, unique: true },
     payload: { type: Schema.Types.Mixed, required: true },
+    snapshotVersion: { type: Number, default: 1 },
+    updatedBy: { type: String, default: 'system' },
     updatedAt: { type: Date, default: Date.now },
   },
   { timestamps: true }
@@ -21,6 +23,7 @@ const guildConfigSchema = new Schema(
     guildId: { type: String, required: true, unique: true },
     syncVersion: { type: Number, required: true, default: 1 },
     configHash: { type: String, required: true },
+    updatedBy: { type: String, default: 'system' },
     antiRaidConfig: { type: Schema.Types.Mixed, required: true },
     guildSettings: { type: Schema.Types.Mixed, default: null },
     antiNukeConfig: { type: Schema.Types.Mixed, default: null },
@@ -29,6 +32,7 @@ const guildConfigSchema = new Schema(
   },
   { versionKey: false }
 );
+guildConfigSchema.index({ guildId: 1, syncVersion: -1 });
 
 const syncOutboxSchema = new Schema(
   {
@@ -38,10 +42,42 @@ const syncOutboxSchema = new Schema(
     syncVersion: { type: Number, default: 0 },
     correlationId: { type: String, required: true },
     payload: { type: Schema.Types.Mixed, default: {} },
-    status: { type: String, enum: ['PENDING', 'PUBLISHED', 'FAILED'], default: 'PENDING', index: true },
+    status: {
+      type: String,
+      enum: ['PENDING', 'PROCESSING', 'PUBLISHED', 'FAILED'],
+      default: 'PENDING',
+      index: true,
+    },
     attempts: { type: Number, default: 0 },
+    maxAttempts: { type: Number, default: 8 },
+    nextAttemptAt: { type: Date, default: Date.now, index: true },
+    leaseOwner: { type: String, default: null },
+    leaseExpiresAt: { type: Date, default: null, index: true },
+    deliveryId: { type: String, default: null },
+    lastError: { type: String, default: null },
     createdAt: { type: Date, default: Date.now, expires: 604800 },
+    processedAt: { type: Date, default: null },
     publishedAt: { type: Date, default: null },
+  },
+  { versionKey: false }
+);
+syncOutboxSchema.index({ status: 1, nextAttemptAt: 1, createdAt: 1 });
+syncOutboxSchema.index({ status: 1, leaseExpiresAt: 1 });
+
+const workerJobStateSchema = new Schema(
+  {
+    jobKey: { type: String, required: true, unique: true },
+    lastRunId: { type: String, required: true },
+    status: {
+      type: String,
+      enum: ['RUNNING', 'COMPLETED', 'FAILED'],
+      required: true,
+    },
+    instanceId: { type: String, required: true },
+    startedAt: { type: Date, default: Date.now },
+    completedAt: { type: Date, default: null },
+    summary: { type: Schema.Types.Mixed, default: {} },
+    errorMessage: { type: String, default: null },
   },
   { versionKey: false }
 );
@@ -72,6 +108,8 @@ const sanctionLedgerSchema = new Schema(
   },
   { versionKey: false }
 );
+sanctionLedgerSchema.index({ guildId: 1, createdAt: -1 });
+sanctionLedgerSchema.index({ status: 1, createdAt: -1 });
 
 const auditLogSchema = new Schema(
   {
@@ -88,6 +126,7 @@ const auditLogSchema = new Schema(
   },
   { versionKey: false }
 );
+auditLogSchema.index({ guildId: 1, createdAt: -1 });
 
 const globalBanSchema = new Schema(
   {
@@ -117,6 +156,8 @@ const globalBanSchema = new Schema(
   },
   { versionKey: false }
 );
+globalBanSchema.index({ status: 1, discordId: 1 });
+globalBanSchema.index({ status: 1, sanctionType: 1, expiresAt: 1 });
 
 export const AegisSnapshotModel =
   mongoose.models.AegisSnapshot || mongoose.model('AegisSnapshot', genericJsonSchema);
@@ -124,6 +165,8 @@ export const GuildConfigModel =
   mongoose.models.GuildConfig || mongoose.model('GuildConfig', guildConfigSchema);
 export const SyncOutboxModel =
   mongoose.models.SyncOutbox || mongoose.model('SyncOutbox', syncOutboxSchema);
+export const WorkerJobStateModel =
+  mongoose.models.WorkerJobState || mongoose.model('WorkerJobState', workerJobStateSchema);
 export const SanctionLedgerModel =
   mongoose.models.SanctionLedger || mongoose.model('SanctionLedger', sanctionLedgerSchema);
 export const AuditLogModel =

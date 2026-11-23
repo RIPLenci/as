@@ -84,6 +84,11 @@ export async function PATCH(
     metadata: { banId: appeal.banId },
   });
 
-  await aegisStore.commitMutation('appeal:reviewed', undefined, { appeal, ban });
+  await aegisStore.commitMutation(
+    'appeal:reviewed',
+    undefined,
+    { appeal, ban },
+    ban ? { globalBanRecord: ban } : undefined
+  );
   return NextResponse.json({ appeal, ban });
 }

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
+import { enforceRateLimit } from '@/lib/server/rate-limit';
 import {
   consumeOAuthExchangeCode,
   getIframeSafeCookieOptions,
@@ -18,6 +19,13 @@ const exchangeSchema = z.object({
 const NO_STORE_HEADERS = { 'Cache-Control': 'no-store, private' };
 
 export async function POST(req: NextRequest) {
+  const rlErr = await enforceRateLimit(req, {
+    bucket: 'oauth_exchange',
+    limit: 20,
+    windowSeconds: 60,
+  });
+  if (rlErr) return rlErr;
+
   const body = await req.json().catch(() => null);
   const parsed = exchangeSchema.safeParse(body);
   if (!parsed.success) {
@@ -27,7 +35,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const record = consumeOAuthExchangeCode(parsed.data.exchangeCode);
+  const record = await consumeOAuthExchangeCode(parsed.data.exchangeCode);
   if (!record) {
     return NextResponse.json(
       {

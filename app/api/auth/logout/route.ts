@@ -11,8 +11,8 @@ import { aegisStore } from '@/lib/server/store';
 export async function POST() {
   const session = await readSessionFromCookies();
   if (session) {
-    revokeSessionId(session.sessionId, session.expiresAt);
-    clearUserDiscordAccessToken(session.userId);
+    await revokeSessionId(session.sessionId, session.expiresAt);
+    await clearUserDiscordAccessToken(session.userId);
     const state = await aegisStore.getState();
     const user = Object.hasOwn(state.users, session.discordId)
       ? state.users[session.discordId]

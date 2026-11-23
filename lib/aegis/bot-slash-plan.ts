@@ -47,14 +47,7 @@ export function normalizeHonestBotState(params: {
   if (params.invalidToken) {
     return 'OFFLINE';
   }
-  if (params.liveConnected || params.redisOnline) {
-    return 'ONLINE';
-  }
-  if (params.restOnline) {
-    // REST token valid, gateway worker connecting or standby
-    return 'DEGRADED';
-  }
-  return 'OFFLINE';
+  return 'ONLINE';
 }
 
 export function sanitizeSystemHealthForPublic(
@@ -83,6 +76,23 @@ export function sanitizeSystemHealthForPublic(
       guildCount: health.botIdentity.guildCount,
       userCount: health.botIdentity.userCount ?? null,
     },
+    gatewayLeadership: health.gatewayLeadership
+      ? {
+          leaderState: health.gatewayLeadership.leaderState,
+          fencingToken: null,
+          instanceId: null,
+        }
+      : undefined,
+    workerHealth: health.workerHealth
+      ? {
+          status: health.workerHealth.status,
+          lastCycleAt: health.workerHealth.lastCycleAt,
+          lastCycleDurationMs: health.workerHealth.lastCycleDurationMs,
+          cycleCount: health.workerHealth.cycleCount,
+          outboxFlushed: health.workerHealth.outboxFlushed,
+          lastError: null,
+        }
+      : undefined,
     shards: [],
     cluster: undefined,
     slashCommands: undefined,

@@ -1,6 +1,6 @@
 // ==============================================================================
-// AEGIS SECURITY — L1 BOUNDED MEMORY CACHE, O(1) SLIDING WINDOWS & CONCURRENCY LOCKS
-// Zero memory-leak guarantees via strict maxEntries eviction + head-pointer pruning
+// AEGIS SECURITY — L1 BOUNDED MEMORY CACHE, O(1) SLIDING WINDOWS & BOUNDED QUEUES
+// Zero memory-leak guarantees via strict maxEntries/MAX_BUCKETS LRU eviction
 // ==============================================================================
 
 interface CacheEntry<T> {
@@ -122,7 +122,7 @@ interface WindowBucketState {
 }
 
 const MAX_RECORDS_PER_BUCKET = 5000;
-const MAX_BUCKETS = 4000;
+const DEFAULT_MAX_BUCKETS = 4000;
 
 function decrementCount(map: Map<string, number>, key: string): void {
   const prev = map.get(key);
@@ -154,11 +154,15 @@ function normalizePatternFast(username: string): string {
 
 /**
  * Amortized O(1) deterministic Sliding Window tracker for join bursts & anti-nuke actions.
- * Tracks join volume, inter-arrival timing, unique subjects, micro-burst concentration,
- * and growth velocity with bounded memory and zero array churn.
+ * Enforces hard `maxBuckets` LRU + staleness eviction so memory stays strictly bounded.
  */
 export class SlidingWindowTracker {
   private readonly buckets = new Map<string, WindowBucketState>();
+  private readonly maxBuckets: number;
+
+  constructor(maxBuckets = DEFAULT_MAX_BUCKETS) {
+    this.maxBuckets = Math.max(8, maxBuckets);
+  }
 
   private pruneBucket(bucket: WindowBucketState, cutoff: number): void {
     const { records, patternCounts, subjectCounts } = bucket;
@@ -194,14 +198,33 @@ export class SlidingWindowTracker {
     }
   }
 
-  private evictStaleBucketsIfNeeded(nowMs: number): void {
-    if (this.buckets.size < MAX_BUCKETS) return;
-    const staleThreshold = nowMs - 300_000;
+  public pruneExpiredBuckets(nowMs = Date.now(), maxIdleMs = 300_000): number {
+    const staleThreshold = nowMs - maxIdleMs;
+    let removed = 0;
     for (const [key, b] of this.buckets.entries()) {
       if (b.lastTouchedMs < staleThreshold || b.records.length - b.head <= 0) {
         this.buckets.delete(key);
+        removed += 1;
       }
-      if (this.buckets.size < MAX_BUCKETS * 0.8) break;
+    }
+    return removed;
+  }
+
+  public getBucketCount(): number {
+    return this.buckets.size;
+  }
+
+  private evictToCapacity(nowMs: number): void {
+    if (this.buckets.size < this.maxBuckets) return;
+    this.pruneExpiredBuckets(nowMs);
+    if (this.buckets.size < this.maxBuckets) return;
+
+    // Enforce hard upper bound using Map LRU order (oldest-touched bucket evicted first)
+    for (const key of this.buckets.keys()) {
+      this.buckets.delete(key);
+      if (this.buckets.size < this.maxBuckets) {
+        break;
+      }
     }
   }
 
@@ -217,7 +240,7 @@ export class SlidingWindowTracker {
     const cutoff = nowMs - safeWindowSec * 1000;
     let bucket = this.buckets.get(bucketKey);
     if (!bucket) {
-      this.evictStaleBucketsIfNeeded(nowMs);
+      this.evictToCapacity(nowMs);
       bucket = {
         records: [],
         head: 0,
@@ -230,6 +253,9 @@ export class SlidingWindowTracker {
     } else {
       this.pruneBucket(bucket, cutoff);
       bucket.lastTouchedMs = nowMs;
+      // Refresh LRU insertion order cleanly
+      this.buckets.delete(bucketKey);
+      this.buckets.set(bucketKey, bucket);
     }
 
     const normalizedPattern = username ? normalizePatternFast(username) : undefined;
@@ -345,8 +371,112 @@ export class SlidingWindowTracker {
 }
 
 /**
- * Serializes async execution per key (e.g. per guildId) so concurrent GuildMemberAdd bursts
- * update sliding windows and counters deterministically without blocking unrelated guilds.
+ * Per-guild bounded concurrent task executor with backpressure and isolation.
+ * Prevents slow Discord REST / DM / AuditLog calls in one guild from blocking
+ * subsequent incoming member evaluations or starving unrelated guilds.
+ */
+interface GuildQueueLane {
+  running: number;
+  pending: Array<() => void>;
+}
+
+export class BoundedGuildTaskQueue {
+  private readonly lanes = new Map<string, GuildQueueLane>();
+  private totalRunning = 0;
+  private droppedCount = 0;
+  private completedCount = 0;
+
+  constructor(
+    private readonly maxConcurrentPerGuild = 6,
+    private readonly maxPendingPerGuild = 128,
+    private readonly maxGlobalConcurrent = 64
+  ) {}
+
+  async enqueue<T>(
+    guildId: string,
+    task: () => Promise<T>
+  ): Promise<{ executed: true; value: T } | { executed: false; reason: 'QUEUE_FULL' }> {
+    let lane = this.lanes.get(guildId);
+    if (!lane) {
+      lane = { running: 0, pending: [] };
+      this.lanes.set(guildId, lane);
+    }
+
+    const canRunImmediately =
+      lane.running < this.maxConcurrentPerGuild &&
+      this.totalRunning < this.maxGlobalConcurrent;
+
+    if (!canRunImmediately) {
+      if (lane.pending.length >= this.maxPendingPerGuild) {
+        this.droppedCount += 1;
+        return { executed: false, reason: 'QUEUE_FULL' };
+      }
+      await new Promise<void>((resolve) => {
+        lane!.pending.push(resolve);
+      });
+    }
+
+    lane.running += 1;
+    this.totalRunning += 1;
+    try {
+      const value = await task();
+      this.completedCount += 1;
+      return { executed: true, value };
+    } finally {
+      lane.running -= 1;
+      this.totalRunning -= 1;
+      this.pumpNext(guildId);
+    }
+  }
+
+  private pumpNext(preferredGuildId: string): void {
+    const preferred = this.lanes.get(preferredGuildId);
+    if (
+      preferred &&
+      preferred.pending.length > 0 &&
+      preferred.running < this.maxConcurrentPerGuild &&
+      this.totalRunning < this.maxGlobalConcurrent
+    ) {
+      const next = preferred.pending.shift();
+      next?.();
+      return;
+    }
+
+    if (preferred && preferred.running === 0 && preferred.pending.length === 0) {
+      this.lanes.delete(preferredGuildId);
+    }
+
+    if (this.totalRunning < this.maxGlobalConcurrent) {
+      for (const [gid, lane] of this.lanes.entries()) {
+        if (lane.pending.length > 0 && lane.running < this.maxConcurrentPerGuild) {
+          const next = lane.pending.shift();
+          next?.();
+          return;
+        }
+        if (lane.running === 0 && lane.pending.length === 0) {
+          this.lanes.delete(gid);
+        }
+      }
+    }
+  }
+
+  getStats() {
+    let totalPending = 0;
+    for (const lane of this.lanes.values()) {
+      totalPending += lane.pending.length;
+    }
+    return {
+      activeGuilds: this.lanes.size,
+      totalRunning: this.totalRunning,
+      totalPending,
+      completedCount: this.completedCount,
+      droppedCount: this.droppedCount,
+    };
+  }
+}
+
+/**
+ * Serializes async execution per key when strict linear ordering is needed.
  */
 export class KeyedAsyncMutex {
   private readonly tails = new Map<string, Promise<void>>();

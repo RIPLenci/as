@@ -11,7 +11,7 @@ import { evaluateAntiAlt, evaluateAntiBot } from '../../../lib/aegis/additional-
 import { evaluateFastJoinMitigation } from '../../../lib/aegis/fast-antiraid';
 import { formatExactDateTime } from '../../../lib/aegis/premium';
 import { executeVerifiedSanction } from '../../../lib/aegis/sanction-executor';
-import { KeyedAsyncMutex } from '../../../lib/aegis/sliding-window';
+import { BoundedGuildTaskQueue } from '../../../lib/aegis/sliding-window';
 import { aegisTelemetry } from '../../../lib/aegis/telemetry';
 import { aegisLogger } from '../../../lib/server/logger';
 import { getMongoStatus } from '../../../lib/server/mongodb';
@@ -25,43 +25,65 @@ import {
   tryClaimMitigation,
 } from './permissions';
 
-const guildJoinMutex = new KeyedAsyncMutex();
+// Bounded per-guild async executor isolates slow Discord REST / DM calls from the fast
+// synchronous sliding-window & RiskEngine path and prevents one raided guild from starving others.
+const guildMitigationQueue = new BoundedGuildTaskQueue(6, 128, 64);
+const coldReconcileInFlight = new Map<string, Promise<number>>();
+
+export function getJoinMitigationQueueStats() {
+  return guildMitigationQueue.getStats();
+}
+
+async function ensureGuildConfigLoadedOnce(guildId: string): Promise<void> {
+  const inflight = coldReconcileInFlight.get(guildId);
+  if (inflight) {
+    await inflight;
+    return;
+  }
+  const p = aegisStore.reconcileGuildConfigsFromMongo(guildId).finally(() => {
+    coldReconcileInFlight.delete(guildId);
+  });
+  coldReconcileInFlight.set(guildId, p);
+  await p;
+}
 
 export async function handleGuildMemberAdd(member: GuildMember): Promise<void> {
   const guildId = member.guild.id;
-  await guildJoinMutex.runExclusive(guildId, async () => {
-    const correlationId = aegisLogger.createCorrelationId('join');
-    const nowMs = Date.now();
-    const nowIso = new Date(nowMs).toISOString();
+  const correlationId = aegisLogger.createCorrelationId('join');
+  const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
 
-    try {
-      aegisTelemetry.recordEventProcessed(guildId, nowMs);
+  try {
+    aegisTelemetry.recordEventProcessed(guildId, nowMs);
 
-      const state = aegisStore.getHotStateSync();
-      const missingGuildConfig = !state.antiRaidConfigs[guildId];
-      if (missingGuildConfig && getMongoStatus() === 'CONNECTED') {
-        await aegisStore.reconcileGuildConfigsFromMongo(guildId);
-      }
+    const state = aegisStore.getHotStateSync();
+    if (!state.antiRaidConfigs[guildId] && getMongoStatus() === 'CONNECTED') {
+      await ensureGuildConfigLoadedOnce(guildId);
+    }
 
-      aegisStore.ensureGuildStructures(state, guildId, member.guild.name);
-      const suite = state.guildSecuritySuites[guildId];
-      const addSec = suite.additionalSecurity;
-      const config = state.antiRaidConfigs[guildId];
-      const botUserId = member.client.user?.id;
+    aegisStore.ensureGuildStructures(state, guildId, member.guild.name);
+    const suite = state.guildSecuritySuites[guildId];
+    const addSec = suite.additionalSecurity;
+    const config = state.antiRaidConfigs[guildId];
+    const botUserId = member.client.user?.id;
 
-      // Refresh bot permissions telemetry quickly from Discord cache
-      const permAudit = auditGuildBotPermissions(member.guild);
-      if (config) {
-        config.botPermissionsMissing = permAudit.missingPermissions;
-      }
-      aegisStore.syncGuildRecord(state, guildId, {
-        botStatus: permAudit.ok ? 'BOT_CONNECTED' : 'INSUFFICIENT_PERMISSIONS',
-        botPermissionsOk: permAudit.ok,
-      });
+    // Fast in-memory bot permission audit from Discord cache
+    const permAudit = auditGuildBotPermissions(member.guild);
+    if (config) {
+      config.botPermissionsMissing = permAudit.missingPermissions;
+    }
+    aegisStore.syncGuildRecord(state, guildId, {
+      botStatus: permAudit.ok ? 'BOT_CONNECTED' : 'INSUFFICIENT_PERMISSIONS',
+      botPermissionsOk: permAudit.ok,
+    });
 
-      // 1. O(1) Globalban check across ALL servers (DM user BEFORE banning + ban + DM server owner)
-      const activeBan = aegisStore.getHotGlobalBan(member.id);
-      if (activeBan && tryClaimMitigation(`globalban:${guildId}:${member.id}`, 5000)) {
+    // ============================================================================
+    // Stage 1: O(1) GlobalBan Lookup -> Enqueue Async DM + Verified Ban + Owner DM
+    // ============================================================================
+    const activeBan = aegisStore.getHotGlobalBan(member.id);
+    if (activeBan && tryClaimMitigation(`globalban:${guildId}:${member.id}`, 5000)) {
+      const capability = inspectMemberCapability(member, botUserId);
+      const qRes = await guildMitigationQueue.enqueue(guildId, async () => {
         const tiempoLabel =
           activeBan.durationKind === 'INDEFINITE'
             ? 'Indefinido'
@@ -86,13 +108,15 @@ export async function handleGuildMemberAdd(member: GuildMember): Promise<void> {
         for (const evFile of (activeBan.evidenceFiles ?? []).slice(0, 5)) {
           const safeName = path.basename(evFile.filename);
           const absPath = path.join(EVIDENCE_DIR, activeBan.id, safeName);
-          if (fs.existsSync(absPath)) {
-            const stat = fs.statSync(absPath);
-            if (totalAttachBytes + stat.size <= MAX_DM_ATTACH_BYTES) {
+          try {
+            const stat = await fs.promises.stat(absPath);
+            if (stat.isFile() && totalAttachBytes + stat.size <= MAX_DM_ATTACH_BYTES) {
               evidenceAttachments.push(new AttachmentBuilder(absPath, { name: safeName }));
               attachedNames.push(safeName);
               totalAttachBytes += stat.size;
             }
+          } catch {
+            // Attachment missing on local disk (multi-host without shared storage)
           }
         }
 
@@ -126,12 +150,16 @@ export async function handleGuildMemberAdd(member: GuildMember): Promise<void> {
                 : dmNoticeWithMedia
             )
             .catch(async (dmErr) => {
-              aegisLogger.warn('DISCORD', 'Globalban DM with attachments failed; retrying plain text notice', {
-                guildId,
-                userId: member.id,
-                correlationId,
-                meta: { error: dmErr instanceof Error ? dmErr.message : String(dmErr) },
-              });
+              aegisLogger.warn(
+                'DISCORD',
+                'Globalban DM with attachments failed; retrying plain text notice',
+                {
+                  guildId,
+                  userId: member.id,
+                  correlationId,
+                  meta: { error: dmErr instanceof Error ? dmErr.message : String(dmErr) },
+                }
+              );
               if (evidenceAttachments.length > 0) {
                 await member.user
                   .send(
@@ -141,13 +169,22 @@ export async function handleGuildMemberAdd(member: GuildMember): Promise<void> {
                       0xef4444
                     )
                   )
-                  .catch(() => undefined);
+                  .catch((fallbackErr) => {
+                    aegisLogger.warn('DISCORD', 'Globalban fallback DM failed', {
+                      guildId,
+                      userId: member.id,
+                      correlationId,
+                      meta: {
+                        error:
+                          fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr),
+                      },
+                    });
+                  });
               }
             }),
           new Promise((resolve) => setTimeout(resolve, 2500)),
         ]);
 
-        const capability = inspectMemberCapability(member, botUserId);
         const sanctionRecord = await executeVerifiedSanction({
           correlationId,
           idempotencyKey: `globalban:${guildId}:${member.id}`,
@@ -160,7 +197,12 @@ export async function handleGuildMemberAdd(member: GuildMember): Promise<void> {
 
         aegisTelemetry.recordSanctionOutcome({
           guildId,
-          outcome: sanctionRecord.status === 'SUCCESS' ? 'SUCCESS' : sanctionRecord.status === 'CANCELLED' ? 'CANCELLED' : 'FAILED',
+          outcome:
+            sanctionRecord.status === 'SUCCESS'
+              ? 'SUCCESS'
+              : sanctionRecord.status === 'CANCELLED'
+              ? 'CANCELLED'
+              : 'FAILED',
           durationMs: sanctionRecord.durationMs,
           errorMessage: sanctionRecord.errorMessage,
         });
@@ -170,6 +212,7 @@ export async function handleGuildMemberAdd(member: GuildMember): Promise<void> {
         });
         void recordSanctionActionToMongo(sanctionRecord);
 
+        // Notify guild owner asynchronously (never fails sanction enforcement)
         member.guild
           .fetchOwner()
           .then((owner) =>
@@ -199,7 +242,16 @@ export async function handleGuildMemberAdd(member: GuildMember): Promise<void> {
                 });
               })
           )
-          .catch(() => undefined);
+          .catch((fetchOwnerErr) => {
+            aegisLogger.warn('DISCORD', 'Failed fetching guild owner for Globalban alert', {
+              guildId,
+              correlationId,
+              meta: {
+                error:
+                  fetchOwnerErr instanceof Error ? fetchOwnerErr.message : String(fetchOwnerErr),
+              },
+            });
+          });
 
         const incidentId = `INC-${new Date().getFullYear()}-${crypto
           .randomBytes(3)
@@ -254,39 +306,64 @@ export async function handleGuildMemberAdd(member: GuildMember): Promise<void> {
                     0xef4444
                   )
                 )
-                .catch(() => undefined);
+                .catch((sendErr) => {
+                  aegisLogger.warn('DISCORD', 'Failed sending Globalban channel notice', {
+                    guildId,
+                    correlationId,
+                    meta: { error: sendErr instanceof Error ? sendErr.message : String(sendErr) },
+                  });
+                });
             }
           });
         }
-        return;
-      }
+      });
 
-      // 2. Anti Bots (Seguridad Adicional)
-      if (member.user.bot) {
-        const isWhitelistedBot = aegisStore.isUserWhitelistedFast(
+      if (!qRes.executed) {
+        aegisTelemetry.recordError(guildId, 'Globalban mitigation dropped due to queue saturation');
+        aegisLogger.warn('ANTIRAID', 'Guild mitigation queue saturated during Globalban', {
           guildId,
-          member.id,
-          'BOT_DETECTION'
-        );
-        const isVerifiedBot = Boolean(member.user.flags?.has(UserFlagsBitField.Flags.VerifiedBot));
-        const botDecision = evaluateAntiBot(addSec, {
-          isBot: true,
-          isVerifiedBot,
-          isWhitelisted: isWhitelistedBot,
+          userId: member.id,
+          correlationId,
         });
-        if (botDecision.triggered) {
+      }
+      return;
+    }
+
+    // ============================================================================
+    // Stage 2: Anti-Bots Pre-Evaluation
+    // ============================================================================
+    if (member.user.bot) {
+      const isWhitelistedBot = aegisStore.isUserWhitelistedFast(
+        guildId,
+        member.id,
+        'BOT_DETECTION'
+      );
+      const isVerifiedBot = Boolean(member.user.flags?.has(UserFlagsBitField.Flags.VerifiedBot));
+      const botDecision = evaluateAntiBot(addSec, {
+        isBot: true,
+        isVerifiedBot,
+        isWhitelisted: isWhitelistedBot,
+      });
+      if (botDecision.triggered && tryClaimMitigation(`antibot:${guildId}:${member.id}`, 5000)) {
+        const capability = inspectMemberCapability(member, botUserId);
+        await guildMitigationQueue.enqueue(guildId, async () => {
           const sanctionRecord = await executeVerifiedSanction({
             correlationId,
             idempotencyKey: `antibot:${guildId}:${member.id}`,
             guildId,
             requestedAction: 'BAN',
             reason: botDecision.reason,
-            capability: inspectMemberCapability(member, botUserId),
+            capability,
             hooks: buildSanctionHooks(member),
           });
           aegisTelemetry.recordSanctionOutcome({
             guildId,
-            outcome: sanctionRecord.status === 'SUCCESS' ? 'SUCCESS' : sanctionRecord.status === 'CANCELLED' ? 'CANCELLED' : 'FAILED',
+            outcome:
+              sanctionRecord.status === 'SUCCESS'
+                ? 'SUCCESS'
+                : sanctionRecord.status === 'CANCELLED'
+                ? 'CANCELLED'
+                : 'FAILED',
             durationMs: sanctionRecord.durationMs,
             errorMessage: sanctionRecord.errorMessage,
           });
@@ -320,6 +397,7 @@ export async function handleGuildMemberAdd(member: GuildMember): Promise<void> {
                 });
             }
           }
+
           const incidentId = `INC-${new Date().getFullYear()}-${crypto
             .randomBytes(3)
             .toString('hex')
@@ -348,27 +426,37 @@ export async function handleGuildMemberAdd(member: GuildMember): Promise<void> {
             incidentId,
             correlationId,
           });
-          return;
-        }
+        });
+        return;
       }
+    }
 
-      // 3. Anti Alts (Seguridad Adicional)
-      const bypassAccountAge = aegisStore.isUserWhitelistedFast(guildId, member.id, 'ACCOUNT_AGE');
-      if (!member.user.bot && !bypassAccountAge) {
-        const altDecision = evaluateAntiAlt(addSec, member.user.createdTimestamp);
-        if (altDecision.triggered) {
+    // ============================================================================
+    // Stage 3: Anti-Alts Evaluation
+    // ============================================================================
+    const bypassAccountAge = aegisStore.isUserWhitelistedFast(guildId, member.id, 'ACCOUNT_AGE');
+    if (!member.user.bot && !bypassAccountAge) {
+      const altDecision = evaluateAntiAlt(addSec, member.user.createdTimestamp);
+      if (altDecision.triggered && tryClaimMitigation(`antialts:${guildId}:${member.id}`, 5000)) {
+        const capability = inspectMemberCapability(member, botUserId);
+        await guildMitigationQueue.enqueue(guildId, async () => {
           const sanctionRecord = await executeVerifiedSanction({
             correlationId,
             idempotencyKey: `antialts:${guildId}:${member.id}`,
             guildId,
             requestedAction: 'KICK',
             reason: `AEGIS Anti Alts: ${altDecision.reason}`,
-            capability: inspectMemberCapability(member, botUserId),
+            capability,
             hooks: buildSanctionHooks(member),
           });
           aegisTelemetry.recordSanctionOutcome({
             guildId,
-            outcome: sanctionRecord.status === 'SUCCESS' ? 'SUCCESS' : sanctionRecord.status === 'CANCELLED' ? 'CANCELLED' : 'FAILED',
+            outcome:
+              sanctionRecord.status === 'SUCCESS'
+                ? 'SUCCESS'
+                : sanctionRecord.status === 'CANCELLED'
+                ? 'CANCELLED'
+                : 'FAILED',
             durationMs: sanctionRecord.durationMs,
             errorMessage: sanctionRecord.errorMessage,
           });
@@ -406,76 +494,88 @@ export async function handleGuildMemberAdd(member: GuildMember): Promise<void> {
             incidentId,
             correlationId,
           });
-          return;
-        }
-      }
-
-      // 4. Ultra-Fast In-Memory Guild Anti-Raid Pipeline (respects master enabled + 4 switches)
-      if (!config?.enabled) {
-        if (config) config.lastEventAt = nowIso;
+        });
         return;
       }
+    }
 
-      if (aegisStore.isUserWhitelistedFast(guildId, member.id, 'JOIN_BURST')) {
-        config.eventsProcessed += 1;
-        config.lastEventAt = nowIso;
-        return;
-      }
+    // ============================================================================
+    // Stage 4: Ultra-Fast Synchronous Sliding Window + Risk Engine Evaluation (< 0.2ms)
+    // Zero network I/O blocks this critical evaluation path.
+    // ============================================================================
+    if (!config?.enabled) {
+      if (config) config.lastEventAt = nowIso;
+      return;
+    }
 
-      const evalStart = performance.now();
-      const burst = aegisStore.joinWindow.recordAndAnalyze(
-        `guild:${guildId}:joins`,
-        member.id,
-        config.timeWindowSeconds,
-        config.maxJoins,
-        member.user.username,
-        nowMs
-      );
-
-      if (config.burstDetection && burst.thresholdExceeded) {
-        aegisStore.raidShield.markBurstDetected(guildId, config.timeWindowSeconds, nowMs);
-      }
-
-      const underActiveRaidShield = config.burstDetection
-        ? aegisStore.raidShield.isUnderActiveRaid(guildId, nowMs)
-        : false;
-      const accountAgeDays = Math.floor((nowMs - member.user.createdTimestamp) / 86_400_000);
-
-      const fastDecision = evaluateFastJoinMitigation({
-        guildId,
-        targetUserId: member.id,
-        accountAgeDays,
-        isBot: member.user.bot,
-        hasAvatar: Boolean(member.user.avatar),
-        joinsInWindow: config.burstDetection ? burst.countInWindow : 1,
-        thresholdExceeded: config.burstDetection ? burst.thresholdExceeded : false,
-        similarUsernameCount: config.joinPatternDetection ? burst.similarUsernameCount : 0,
-        repetitiveJoinCount: config.joinPatternDetection ? burst.repetitiveSubjectCount : 0,
-        underActiveRaidShield,
-        concentrationScore: burst.concentrationScore,
-        growthRateRatio: burst.growthRateRatio,
-        config,
-      });
-
-      const evalDurationMs = Number((performance.now() - evalStart).toFixed(3));
-      aegisTelemetry.recordDetectorRun(guildId, evalDurationMs, fastDecision.shouldMitigate, true);
-
+    if (aegisStore.isUserWhitelistedFast(guildId, member.id, 'JOIN_BURST')) {
       config.eventsProcessed += 1;
-      config.threatsInvestigated = (config.threatsInvestigated ?? 0) + 1;
       config.lastEventAt = nowIso;
-      config.lastDetectorRunAt = nowIso;
+      return;
+    }
 
-      if (!fastDecision.shouldMitigate) {
-        return;
-      }
+    const evalStart = performance.now();
+    const burst = aegisStore.joinWindow.recordAndAnalyze(
+      `guild:${guildId}:joins`,
+      member.id,
+      config.timeWindowSeconds,
+      config.maxJoins,
+      member.user.username,
+      nowMs
+    );
 
-      config.attacksDetected += 1;
-      const capability = inspectMemberCapability(member, botUserId);
-      const isPunitive =
-        fastDecision.action !== 'LOG_ONLY' && fastDecision.action !== 'ALERT';
+    if (config.burstDetection && burst.thresholdExceeded) {
+      aegisStore.raidShield.markBurstDetected(guildId, config.timeWindowSeconds, nowMs);
+    }
 
+    const underActiveRaidShield = config.burstDetection
+      ? aegisStore.raidShield.isUnderActiveRaid(guildId, nowMs)
+      : false;
+    const accountAgeDays = Math.floor((nowMs - member.user.createdTimestamp) / 86_400_000);
+
+    const fastDecision = evaluateFastJoinMitigation({
+      correlationId,
+      guildId,
+      targetUserId: member.id,
+      accountAgeDays,
+      isBot: member.user.bot,
+      hasAvatar: Boolean(member.user.avatar),
+      joinsInWindow: config.burstDetection ? burst.countInWindow : 1,
+      thresholdExceeded: config.burstDetection ? burst.thresholdExceeded : false,
+      similarUsernameCount: config.joinPatternDetection ? burst.similarUsernameCount : 0,
+      repetitiveJoinCount: config.joinPatternDetection ? burst.repetitiveSubjectCount : 0,
+      underActiveRaidShield,
+      concentrationScore: burst.concentrationScore,
+      growthRateRatio: burst.growthRateRatio,
+      config,
+    });
+
+    const evalDurationMs = Number((performance.now() - evalStart).toFixed(3));
+    aegisTelemetry.recordDetectorRun(guildId, evalDurationMs, fastDecision.shouldMitigate, true);
+
+    config.eventsProcessed += 1;
+    config.threatsInvestigated = (config.threatsInvestigated ?? 0) + 1;
+    config.lastEventAt = nowIso;
+    config.lastDetectorRunAt = nowIso;
+
+    if (!fastDecision.shouldMitigate) {
+      return;
+    }
+
+    if (!tryClaimMitigation(`antiraid:${guildId}:${member.id}`, 4000)) {
+      return;
+    }
+
+    config.attacksDetected += 1;
+    const capability = inspectMemberCapability(member, botUserId);
+    const isPunitive = fastDecision.action !== 'LOG_ONLY' && fastDecision.action !== 'ALERT';
+
+    // ============================================================================
+    // Stage 5: Non-Blocking Bounded Per-Guild Sanction & Notification Dispatch
+    // ============================================================================
+    const qRes = await guildMitigationQueue.enqueue(guildId, async () => {
       let executedActionLabel: string = fastDecision.action;
-      let incidentStatus: 'OPEN' | 'MITIGATED' = isPunitive ? 'OPEN' : 'OPEN';
+      let incidentStatus: 'OPEN' | 'MITIGATED' = 'OPEN';
       let eventStatus: 'PROCESSED' | 'MITIGATED' | 'FLAGGED' | 'LOGGED' = 'FLAGGED';
       let sanctionNote = '';
 
@@ -631,15 +731,24 @@ export async function handleGuildMemberAdd(member: GuildMember): Promise<void> {
           });
         }
       }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      aegisTelemetry.recordError(guildId, msg);
-      aegisLogger.error('ANTIRAID', 'Unhandled exception in GuildMemberAdd pipeline', {
+    });
+
+    if (!qRes.executed) {
+      aegisTelemetry.recordError(guildId, 'Anti-Raid mitigation dropped due to queue saturation');
+      aegisLogger.warn('ANTIRAID', 'Guild mitigation queue saturated during raid burst', {
         guildId,
         userId: member.id,
         correlationId,
-        meta: { error: msg },
       });
     }
-  });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    aegisTelemetry.recordError(guildId, msg);
+    aegisLogger.error('ANTIRAID', 'Unhandled exception in GuildMemberAdd pipeline', {
+      guildId,
+      userId: member.id,
+      correlationId,
+      meta: { error: msg },
+    });
+  }
 }

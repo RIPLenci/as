@@ -47,8 +47,8 @@ export async function GET(req: NextRequest) {
           : 'No se pudo verificar el estado en vivo del bot con Discord API.';
     }
 
-    // Re-fetch user guilds using volatile OAuth access token if still valid in server memory
-    const oauthToken = getUserDiscordAccessToken(user.id);
+    // Re-fetch user guilds using encrypted shared OAuth access token if still valid
+    const oauthToken = await getUserDiscordAccessToken(user.id);
     if (oauthToken) {
       try {
         const liveDiscordGuilds = await fetchDiscordUserGuilds(oauthToken);

@@ -206,7 +206,7 @@ export async function GET(req: NextRequest) {
   // Verify OAuth2 state from either:
   // 1) Server-side single-use pending state registry (resilient to cross-origin iframe cookie partitioning)
   // 2) Signed OAUTH_STATE_COOKIE_NAME cookie (when browser attaches cookie across same top-level context)
-  const pendingState = consumePendingOAuthState(stateParam);
+  const pendingState = await consumePendingOAuthState(stateParam);
   const rawStateCookie = req.cookies.get(OAUTH_STATE_COOKIE_NAME)?.value;
   const cookieState = verifyPayload<OAuthStatePayload>(rawStateCookie);
 
@@ -289,7 +289,7 @@ export async function GET(req: NextRequest) {
     };
 
     // Cache volatile user OAuth token in server memory for live guild roster refreshes
-    setUserDiscordAccessToken(userId, tokenRes.access_token, tokenRes.expires_in);
+    await setUserDiscordAccessToken(userId, tokenRes.access_token, tokenRes.expires_in);
 
     // 1 single Discord Bot call tells us instantly which guilds have AEGIS installed,
     // avoiding sequential HTTP waterfalls & rate-limit spikes!
@@ -404,7 +404,7 @@ export async function GET(req: NextRequest) {
       expiresAt: Date.now() + maxAge * 1000,
     });
 
-    const exchangeCode = createOAuthExchangeCode({
+    const exchangeCode = await createOAuthExchangeCode({
       userId,
       discordId: discordUser.id,
       sessionId,

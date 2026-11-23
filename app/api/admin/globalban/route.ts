@@ -8,6 +8,7 @@ import {
 } from '@/lib/aegis/security-helpers';
 import type { GlobalBanEvidenceFile, GlobalBanRecord, RiskLevel } from '@/lib/aegis/types';
 import { requireSuperOwner, verifyMutationOrigin } from '@/lib/server/auth-guard';
+import { enforceRateLimit } from '@/lib/server/rate-limit';
 import { aegisStore, EVIDENCE_DIR } from '@/lib/server/store';
 
 export const dynamic = 'force-dynamic';
@@ -52,6 +53,14 @@ export async function POST(req: NextRequest) {
 
   const auth = await requireSuperOwner();
   if (!auth.ok) return auth.response;
+
+  const rlErr = await enforceRateLimit(req, {
+    bucket: 'admin_globalban',
+    userId: auth.ctx.user.id,
+    limit: 60,
+    windowSeconds: 60,
+  });
+  if (rlErr) return rlErr;
 
   const { state, user } = auth.ctx;
   const contentType = req.headers.get('content-type') || '';
@@ -265,7 +274,7 @@ export async function POST(req: NextRequest) {
     },
   });
 
-  await aegisStore.commitMutation('globalban:created', undefined, { ban });
+  await aegisStore.commitMutation('globalban:created', undefined, { ban }, { globalBanRecord: ban });
 
   return NextResponse.json(
     {
@@ -336,10 +345,15 @@ export async function DELETE(req: NextRequest) {
     metadata: { discordId },
   });
 
-  await aegisStore.commitMutation('globalban:revoked', undefined, {
-    banId: target.id,
-    discordId,
-  });
+  await aegisStore.commitMutation(
+    'globalban:revoked',
+    undefined,
+    {
+      banId: target.id,
+      discordId,
+    },
+    { globalBanRecord: target }
+  );
 
   return NextResponse.json({
     ok: true,

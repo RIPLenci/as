@@ -339,12 +339,12 @@ export async function connectOrRestartBot(forceRestart = false): Promise<{
       };
     }
     const lockToken = runner.gatewayLeaseToken ?? `embedded-${process.pid}`;
-    const acquired = await redisCoordinator.acquireDistributedLock(
+    const lockRes = await redisCoordinator.acquireDistributedLockWithFencing(
       GATEWAY_OWNER_LOCK_KEY,
       lockToken,
       45_000
     );
-    if (!acquired) {
+    if (!lockRes.acquired) {
       return {
         ok: false,
         ready: false,
@@ -352,7 +352,7 @@ export async function connectOrRestartBot(forceRestart = false): Promise<{
         id: null,
         pingMs: null,
         guildCount: null,
-        error: 'Otro proceso posee actualmente el lock distribuido del Gateway de Discord.',
+        error: `Otro proceso o nodo posee el lock distribuido del Gateway (${lockRes.reason}).`,
       };
     }
     runner.gatewayLeaseToken = lockToken;
@@ -397,6 +397,7 @@ export async function connectOrRestartBot(forceRestart = false): Promise<{
   runner.lastError = null;
 
   attachAegisBotHandlers(client, {
+    canProcessEvents: () => runner.ready && runner.client === client,
     onGuildJoined: async (guildId) => {
       const appId = await resolveBotApplicationId(env.discordBotToken, client);
       if (appId) {
@@ -439,14 +440,27 @@ export async function connectOrRestartBot(forceRestart = false): Promise<{
       void publishLiveHeartbeat(readyClient);
       if (runner.heartbeatTimer) clearInterval(runner.heartbeatTimer);
       runner.heartbeatTimer = setInterval(() => {
-        if (runner.gatewayLeaseToken && redisCoordinator.getStatus() === 'CONNECTED') {
-          void redisCoordinator.acquireDistributedLock(
-            GATEWAY_OWNER_LOCK_KEY,
-            runner.gatewayLeaseToken,
-            45_000
-          );
-        }
-        void publishLiveHeartbeat(readyClient);
+        void (async () => {
+          if (env.redisConfigured && runner.gatewayLeaseToken) {
+            const renew = await redisCoordinator.verifyAndRenewDistributedLock(
+              GATEWAY_OWNER_LOCK_KEY,
+              runner.gatewayLeaseToken,
+              45_000
+            );
+            if (!renew.acquired) {
+              aegisLogger.error('DISCORD', 'Embedded runner lost Gateway leadership; disconnecting client', {
+                meta: { reason: renew.reason },
+              });
+              runner.ready = false;
+              if (runner.heartbeatTimer) clearInterval(runner.heartbeatTimer);
+              runner.heartbeatTimer = null;
+              await readyClient.destroy().catch(() => undefined);
+              if (runner.client === readyClient) runner.client = null;
+              return;
+            }
+          }
+          await publishLiveHeartbeat(readyClient);
+        })();
       }, 15_000);
       if (runner.maintenanceTimer) clearInterval(runner.maintenanceTimer);
       runner.maintenanceTimer = setInterval(() => {

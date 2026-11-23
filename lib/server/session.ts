@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { cookies, headers } from 'next/headers';
 import { getServerEnv } from './env';
+import { redisCoordinator } from './redis';
 
 export const SESSION_COOKIE_NAME = 'aegis_session';
 export const OAUTH_STATE_COOKIE_NAME = 'aegis_oauth_state';
@@ -35,6 +36,49 @@ export interface OAuthExchangeRecord {
 function getSigningKey(): Buffer {
   const { sessionSecret } = getServerEnv();
   return crypto.createHash('sha256').update(sessionSecret).digest();
+}
+
+function getEncryptionKey(): Buffer {
+  const raw = process.env.ENCRYPTION_KEY?.trim() || getServerEnv().sessionSecret;
+  return crypto.createHash('sha256').update(`aegis:token-enc:${raw}`).digest();
+}
+
+function encryptSecretValue(plaintext: string): string {
+  const key = getEncryptionKey();
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `${iv.toString('base64url')}.${tag.toString('base64url')}.${encrypted.toString('base64url')}`;
+}
+
+function decryptSecretValue(ciphertext: string): string | null {
+  try {
+    const parts = ciphertext.split('.');
+    if (parts.length !== 3) return null;
+    const [ivB64, tagB64, dataB64] = parts;
+    const iv = Buffer.from(ivB64, 'base64url');
+    const tag = Buffer.from(tagB64, 'base64url');
+    const data = Buffer.from(dataB64, 'base64url');
+    const decipher = crypto.createDecipheriv('aes-256-gcm', getEncryptionKey(), iv);
+    decipher.setAuthTag(tag);
+    return Buffer.concat([decipher.update(data), decipher.final()]).toString('utf8');
+  } catch {
+    return null;
+  }
+}
+
+function hashKeySegment(raw: string): string {
+  return crypto.createHash('sha256').update(raw).digest('hex').slice(0, 32);
+}
+
+async function isRedisSharedAvailable(): Promise<boolean> {
+  if (redisCoordinator.getStatus() === 'CONNECTED') return true;
+  if (getServerEnv().redisConfigured) {
+    const status = await redisCoordinator.ensureConnected();
+    return status === 'CONNECTED';
+  }
+  return false;
 }
 
 export function signPayload<T extends object>(payload: T): string {
@@ -109,8 +153,9 @@ export function verifyStateSignature(state: string | undefined | null): boolean 
 }
 
 // ==============================================================================
-// Server-side Single-Use Pending OAuth State & Exchange Registry
-// Solves cross-origin AI Studio iframe vs. top-level popup cookie partitioning.
+// Distributed Single-Use Pending OAuth State, Exchange Codes & Revocations
+// Uses shared Redis atomically across all Web/API instances; falls back to
+// local file/memory ONLY when Redis is unconfigured/unavailable.
 // ==============================================================================
 
 const OAUTH_PENDING_DIR = path.join(process.cwd(), '.aegis-data');
@@ -138,7 +183,9 @@ function readPendingSnapshot(): PendingStoreSnapshot {
 
   if (fs.existsSync(OAUTH_PENDING_FILE)) {
     try {
-      const disk = JSON.parse(fs.readFileSync(OAUTH_PENDING_FILE, 'utf8')) as Partial<PendingStoreSnapshot>;
+      const disk = JSON.parse(
+        fs.readFileSync(OAUTH_PENDING_FILE, 'utf8')
+      ) as Partial<PendingStoreSnapshot>;
       snap = {
         states: { ...(disk.states || {}), ...snap.states },
         exchanges: { ...(disk.exchanges || {}), ...snap.exchanges },
@@ -173,7 +220,7 @@ function writePendingSnapshot(snap: PendingStoreSnapshot): void {
     fs.writeFileSync(tmp, JSON.stringify(snap), { encoding: 'utf8', mode: 0o600 });
     fs.renameSync(tmp, OAUTH_PENDING_FILE);
   } catch {
-    // Non-fatal if read-only fs; in-memory globalThis map remains active
+    // Non-fatal if read-only fs; in-memory map remains active
   }
 }
 
@@ -181,29 +228,85 @@ export function generateSessionId(): string {
   return `ses_${crypto.randomBytes(16).toString('hex')}`;
 }
 
-export function revokeSessionId(sessionId: string | undefined | null, expiresAtMs?: number): void {
+export async function revokeSessionId(
+  sessionId: string | undefined | null,
+  expiresAtMs?: number
+): Promise<void> {
   if (!sessionId) return;
+  const now = Date.now();
+  const targetExp = expiresAtMs && expiresAtMs > now ? expiresAtMs : now + 24 * 3600_000;
+  const ttlMs = Math.max(60_000, targetExp - now);
+
+  if (await isRedisSharedAvailable()) {
+    const ok = await redisCoordinator.setSharedKey(
+      `aegis:session:revoked:${hashKeySegment(sessionId)}`,
+      String(targetExp),
+      ttlMs
+    );
+    if (ok) return;
+  }
+
   const snap = readPendingSnapshot();
-  snap.revokedSessions[sessionId] =
-    expiresAtMs && expiresAtMs > Date.now() ? expiresAtMs : Date.now() + 24 * 3600_000;
+  snap.revokedSessions[sessionId] = targetExp;
   writePendingSnapshot(snap);
 }
 
-export function isSessionRevoked(sessionId: string | undefined | null): boolean {
+export async function isSessionRevoked(sessionId: string | undefined | null): Promise<boolean> {
   if (!sessionId) return true;
+
+  if (await isRedisSharedAvailable()) {
+    const raw = await redisCoordinator.getSharedKey(
+      `aegis:session:revoked:${hashKeySegment(sessionId)}`
+    );
+    if (raw) {
+      const exp = Number(raw);
+      return Number.isFinite(exp) ? exp >= Date.now() : true;
+    }
+    // Check local cache as well in case session was revoked right before Redis came online
+  }
+
   const snap = readPendingSnapshot();
   if (!Object.hasOwn(snap.revokedSessions, sessionId)) return false;
   return snap.revokedSessions[sessionId] >= Date.now();
 }
 
-export function savePendingOAuthState(payload: OAuthStatePayload): void {
+export async function savePendingOAuthState(payload: OAuthStatePayload): Promise<void> {
+  if (await isRedisSharedAvailable()) {
+    const ok = await redisCoordinator.setSharedKey(
+      `aegis:oauth:state:${hashKeySegment(payload.state)}`,
+      JSON.stringify(payload),
+      PENDING_STATE_TTL_MS
+    );
+    if (ok) return;
+  }
+
   const snap = readPendingSnapshot();
   snap.states[payload.state] = payload;
   writePendingSnapshot(snap);
 }
 
-export function consumePendingOAuthState(state: string): OAuthStatePayload | null {
+export async function consumePendingOAuthState(
+  state: string
+): Promise<OAuthStatePayload | null> {
   if (!verifyStateSignature(state)) return null;
+
+  if (await isRedisSharedAvailable()) {
+    const raw = await redisCoordinator.consumeSharedKeyAtomically(
+      `aegis:oauth:state:${hashKeySegment(state)}`
+    );
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw) as OAuthStatePayload;
+        if (parsed.state !== state || Date.now() - parsed.issuedAt > PENDING_STATE_TTL_MS) {
+          return null;
+        }
+        return parsed;
+      } catch {
+        return null;
+      }
+    }
+  }
+
   const snap = readPendingSnapshot();
   if (!Object.hasOwn(snap.states, state)) return null;
   const found = snap.states[state];
@@ -213,12 +316,12 @@ export function consumePendingOAuthState(state: string): OAuthStatePayload | nul
   return found;
 }
 
-export function createOAuthExchangeCode(params: {
+export async function createOAuthExchangeCode(params: {
   userId: string;
   discordId: string;
   sessionId: string;
   maxAgeSeconds: number;
-}): string {
+}): Promise<string> {
   const nonce = crypto.randomBytes(24).toString('base64url');
   const tag = crypto
     .createHmac('sha256', getSigningKey())
@@ -226,8 +329,7 @@ export function createOAuthExchangeCode(params: {
     .digest('base64url')
     .slice(0, 16);
   const code = `${nonce}.${tag}`;
-  const snap = readPendingSnapshot();
-  snap.exchanges[code] = {
+  const record: OAuthExchangeRecord = {
     code,
     userId: params.userId,
     discordId: params.discordId,
@@ -235,11 +337,25 @@ export function createOAuthExchangeCode(params: {
     maxAgeSeconds: params.maxAgeSeconds,
     issuedAt: Date.now(),
   };
+
+  if (await isRedisSharedAvailable()) {
+    const ok = await redisCoordinator.setSharedKey(
+      `aegis:oauth:exchange:${hashKeySegment(code)}`,
+      JSON.stringify(record),
+      EXCHANGE_CODE_TTL_MS
+    );
+    if (ok) return code;
+  }
+
+  const snap = readPendingSnapshot();
+  snap.exchanges[code] = record;
   writePendingSnapshot(snap);
   return code;
 }
 
-export function consumeOAuthExchangeCode(code: string | undefined | null): OAuthExchangeRecord | null {
+export async function consumeOAuthExchangeCode(
+  code: string | undefined | null
+): Promise<OAuthExchangeRecord | null> {
   if (!code || !code.includes('.')) return null;
   const [nonce, tag] = code.split('.');
   if (!nonce || !tag) return null;
@@ -252,6 +368,21 @@ export function consumeOAuthExchangeCode(code: string | undefined | null): OAuth
   const b = Buffer.from(expected);
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
 
+  if (await isRedisSharedAvailable()) {
+    const raw = await redisCoordinator.consumeSharedKeyAtomically(
+      `aegis:oauth:exchange:${hashKeySegment(code)}`
+    );
+    if (raw) {
+      try {
+        const record = JSON.parse(raw) as OAuthExchangeRecord;
+        if (Date.now() - record.issuedAt > EXCHANGE_CODE_TTL_MS) return null;
+        return record;
+      } catch {
+        return null;
+      }
+    }
+  }
+
   const snap = readPendingSnapshot();
   if (!Object.hasOwn(snap.exchanges, code)) return null;
   const record = snap.exchanges[code];
@@ -262,8 +393,7 @@ export function consumeOAuthExchangeCode(code: string | undefined | null): OAuth
 }
 
 export function getIframeSafeCookieOptions(maxAgeSeconds: number) {
-  // Per oauth-integration guidelines: SameSite=None and Secure=true are required
-  // for cookies inside the cross-origin AI Studio preview iframe.
+  // SameSite=None and Secure=true are required for cookies inside cross-origin preview iframes.
   return {
     httpOnly: true,
     secure: true,
@@ -273,7 +403,9 @@ export function getIframeSafeCookieOptions(maxAgeSeconds: number) {
   };
 }
 
-export async function readSessionFromCookies(explicitBearer?: string | null): Promise<SessionPayload | null> {
+export async function readSessionFromCookies(
+  explicitBearer?: string | null
+): Promise<SessionPayload | null> {
   const cookieStore = await cookies();
   let raw = cookieStore.get(SESSION_COOKIE_NAME)?.value;
 
@@ -293,17 +425,17 @@ export async function readSessionFromCookies(explicitBearer?: string | null): Pr
   if (!payload) return null;
   if (!payload.sessionId || typeof payload.expiresAt !== 'number') return null;
   if (Date.now() > payload.expiresAt) return null;
-  if (isSessionRevoked(payload.sessionId)) return null;
+  if (await isSessionRevoked(payload.sessionId)) return null;
   return payload;
 }
 
 // ==============================================================================
-// Volatile Server-Only Discord OAuth Token Cache (Never Persisted or Sent to UI)
-// Allows live guild roster refreshes (?refresh=1) during the active session.
+// Encrypted Shared Discord OAuth Access Token Cache (AES-256-GCM in Redis / Memory)
+// Never persisted in MongoDB snapshots or exposed to client browsers.
 // ==============================================================================
 
 interface VolatileOAuthToken {
-  accessToken: string;
+  encryptedToken: string;
   expiresAt: number;
 }
 
@@ -318,32 +450,55 @@ function getTokenMap(): Map<string, VolatileOAuthToken> {
   return globalForDiscordTokens.__aegisDiscordOAuthTokens;
 }
 
-export function setUserDiscordAccessToken(
+export async function setUserDiscordAccessToken(
   userId: string,
   accessToken: string,
   expiresInSeconds?: number
-): void {
+): Promise<void> {
   if (!userId || !accessToken) return;
-  const ttlMs = Math.max(60, expiresInSeconds || 3600) * 1000;
+  const ttlMs = Math.max(60, expiresInSeconds || 3600) * 1000 - 15_000;
+  const encryptedToken = encryptSecretValue(accessToken);
+
+  if (await isRedisSharedAvailable()) {
+    const ok = await redisCoordinator.setSharedKey(
+      `aegis:oauth:token:${hashKeySegment(userId)}`,
+      encryptedToken,
+      Math.max(30_000, ttlMs)
+    );
+    if (ok) return;
+  }
+
   getTokenMap().set(userId, {
-    accessToken,
-    expiresAt: Date.now() + ttlMs - 15_000,
+    encryptedToken,
+    expiresAt: Date.now() + Math.max(30_000, ttlMs),
   });
 }
 
-export function getUserDiscordAccessToken(userId: string): string | null {
+export async function getUserDiscordAccessToken(userId: string): Promise<string | null> {
   if (!userId) return null;
+
+  if (await isRedisSharedAvailable()) {
+    const encrypted = await redisCoordinator.getSharedKey(
+      `aegis:oauth:token:${hashKeySegment(userId)}`
+    );
+    if (encrypted) {
+      return decryptSecretValue(encrypted);
+    }
+  }
+
   const entry = getTokenMap().get(userId);
   if (!entry) return null;
   if (Date.now() > entry.expiresAt) {
     getTokenMap().delete(userId);
     return null;
   }
-  return entry.accessToken;
+  return decryptSecretValue(entry.encryptedToken);
 }
 
-export function clearUserDiscordAccessToken(userId: string): void {
+export async function clearUserDiscordAccessToken(userId: string): Promise<void> {
   if (!userId) return;
   getTokenMap().delete(userId);
+  if (await isRedisSharedAvailable()) {
+    await redisCoordinator.deleteSharedKey(`aegis:oauth:token:${hashKeySegment(userId)}`);
+  }
 }
-

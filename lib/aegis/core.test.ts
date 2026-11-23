@@ -247,7 +247,7 @@ test('Empty persistence store contains zero fake, seed, or sample records', () =
   assert.equal(empty.notifications.length, 0);
 });
 
-test('OAuth2 PKCE state, HMAC signature, and single-use consumption enforce CSRF safety', () => {
+test('OAuth2 PKCE state, HMAC signature, and single-use consumption enforce CSRF safety', async () => {
   const { codeVerifier, codeChallenge } = generatePkcePair();
   assert.ok(codeVerifier.length >= 32);
   assert.ok(codeChallenge.length >= 32);
@@ -258,7 +258,7 @@ test('OAuth2 PKCE state, HMAC signature, and single-use consumption enforce CSRF
   assert.equal(verifyStateSignature(`${state}tamper`), false);
   assert.equal(verifyStateSignature('unsigned-token'), false);
 
-  savePendingOAuthState({
+  await savePendingOAuthState({
     state,
     codeVerifier,
     redirectUri: 'https://ais-dev-test.us-east1.run.app/api/auth/callback',
@@ -266,32 +266,32 @@ test('OAuth2 PKCE state, HMAC signature, and single-use consumption enforce CSRF
   });
 
   // First consumption succeeds with exact PKCE verifier
-  const consumed = consumePendingOAuthState(state);
+  const consumed = await consumePendingOAuthState(state);
   assert.ok(consumed);
   assert.equal(consumed.codeVerifier, codeVerifier);
 
   // Replay attempt fails (single-use)
-  assert.equal(consumePendingOAuthState(state), null);
+  assert.equal(await consumePendingOAuthState(state), null);
 });
 
-test('OAuth2 single-use session exchange codes and payload HMAC signatures prevent tampering', () => {
+test('OAuth2 single-use session exchange codes and payload HMAC signatures prevent tampering', async () => {
   const token = signPayload({ userId: 'usr_123', discordId: '123', expiresAt: Date.now() + 60_000 });
   const verified = verifyPayload<{ userId: string }>(token);
   assert.equal(verified?.userId, 'usr_123');
   assert.equal(verifyPayload(`${token}x`), null);
 
-  const exchange = createOAuthExchangeCode({
+  const exchange = await createOAuthExchangeCode({
     userId: 'usr_999',
     discordId: '999999999999999999',
     sessionId: 'ses_abc',
     maxAgeSeconds: 3600,
   });
 
-  const record = consumeOAuthExchangeCode(exchange);
+  const record = await consumeOAuthExchangeCode(exchange);
   assert.ok(record);
   assert.equal(record.userId, 'usr_999');
   // Second use must fail
-  assert.equal(consumeOAuthExchangeCode(exchange), null);
+  assert.equal(await consumeOAuthExchangeCode(exchange), null);
 });
 
 test('Callback URL resolution handles Dev .run.app, Shared .run.app, and localhost cleanly', () => {
@@ -382,14 +382,14 @@ test('Discord guild permission bitmask accepts Owner, Administrator (0x8), and M
   assert.equal(hasManageGuildOrAdmin('104324673', false), false);
 });
 
-test('Session revocation blacklist invalidates logged-out session IDs', () => {
+test('Session revocation blacklist invalidates logged-out session IDs', async () => {
   const sid = generateSessionId();
   assert.ok(sid.startsWith('ses_'));
-  assert.equal(isSessionRevoked(sid), false);
-  assert.equal(isSessionRevoked(null), true);
+  assert.equal(await isSessionRevoked(sid), false);
+  assert.equal(await isSessionRevoked(null), true);
 
-  revokeSessionId(sid, Date.now() + 60_000);
-  assert.equal(isSessionRevoked(sid), true);
+  await revokeSessionId(sid, Date.now() + 60_000);
+  assert.equal(await isSessionRevoked(sid), true);
 });
 
 test('RBAC role resolution and customGrants enforcement', () => {

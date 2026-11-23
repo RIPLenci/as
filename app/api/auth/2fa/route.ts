@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { twoFactorActionSchema } from '@/lib/aegis/validators';
 import { requireAuthenticatedUser } from '@/lib/server/auth-guard';
+import { enforceRateLimit } from '@/lib/server/rate-limit';
 import { aegisStore } from '@/lib/server/store';
 import {
   buildTotpOtpAuthUri,
@@ -29,6 +30,14 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const auth = await requireAuthenticatedUser();
   if (!auth.ok) return auth.response;
+
+  const rlErr = await enforceRateLimit(req, {
+    bucket: 'auth_2fa',
+    userId: auth.ctx.user.id,
+    limit: 12,
+    windowSeconds: 60,
+  });
+  if (rlErr) return rlErr;
 
   const body = await req.json().catch(() => null);
   const parsed = twoFactorActionSchema.safeParse(body);

@@ -2,11 +2,20 @@ import { NextRequest, NextResponse } from 'next/server';
 import { formatDurationHuman, PLAN_CATALOG } from '@/lib/aegis/premium';
 import { premiumRedeemSchema } from '@/lib/aegis/validators';
 import { requireAuthenticatedUser } from '@/lib/server/auth-guard';
+import { enforceRateLimit } from '@/lib/server/rate-limit';
 import { aegisStore } from '@/lib/server/store';
 
 export async function POST(req: NextRequest) {
   const auth = await requireAuthenticatedUser();
   if (!auth.ok) return auth.response;
+
+  const rlErr = await enforceRateLimit(req, {
+    bucket: 'premium_redeem',
+    userId: auth.ctx.user.id,
+    limit: 10,
+    windowSeconds: 60,
+  });
+  if (rlErr) return rlErr;
 
   const body = await req.json().catch(() => null);
   const parsed = premiumRedeemSchema.safeParse(body);

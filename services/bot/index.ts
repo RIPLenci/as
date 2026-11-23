@@ -1,4 +1,3 @@
-import crypto from 'node:crypto';
 import {
   ActivityType,
   Client,
@@ -11,6 +10,10 @@ import {
 import { planGuildCommandSyncBatches } from '../../lib/aegis/bot-slash-plan';
 import { aegisTelemetry } from '../../lib/aegis/telemetry';
 import { getServerEnv } from '../../lib/server/env';
+import {
+  GATEWAY_OWNER_LOCK_KEY,
+  GatewayLeadershipController,
+} from '../../lib/server/gateway-leadership';
 import { aegisLogger } from '../../lib/server/logger';
 import { ensureMongoConnected } from '../../lib/server/mongodb';
 import { redisCoordinator } from '../../lib/server/redis';
@@ -21,9 +24,6 @@ import { attachAegisBotHandlers } from './handlers';
 import { auditGuildBotPermissions } from './modules/permissions';
 
 process.env.AEGIS_STANDALONE_BOT = 'true';
-
-const GATEWAY_OWNER_LOCK_KEY = 'aegis:bot:gateway_owner';
-const instanceId = `bot-${process.pid}-${crypto.randomBytes(3).toString('hex')}`;
 
 async function resolveAppId(token: string, client: Client): Promise<string | null> {
   const env = getServerEnv();
@@ -81,20 +81,100 @@ async function startBot() {
     process.exit(1);
   }
 
+  let client: Client | null = null;
+  let heartbeatTimer: NodeJS.Timeout | null = null;
+  let reconcileTimer: NodeJS.Timeout | null = null;
+  let unsubscribeRedis: (() => void) | null = null;
+  let shuttingDown = false;
+
+  const stopTimers = () => {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
+    if (reconcileTimer) {
+      clearInterval(reconcileTimer);
+      reconcileTimer = null;
+    }
+  };
+
+  const leadership = new GatewayLeadershipController({
+    lockKey: GATEWAY_OWNER_LOCK_KEY,
+    ttlMs: 45_000,
+    onDisconnectGateway: async () => {
+      stopTimers();
+      if (client) {
+        await client.destroy().catch((err) => {
+          aegisLogger.warn('DISCORD', 'Error destroying Discord Gateway client', {
+            meta: { error: err instanceof Error ? err.message : String(err) },
+          });
+        });
+      }
+    },
+    onLeadershipLost: async (reason) => {
+      aegisLogger.fatal('DISCORD', 'Exiting standalone bot cleanly after leadership loss', {
+        meta: { reason, instanceId: leadership.instanceId },
+      });
+      if (unsubscribeRedis) unsubscribeRedis();
+      await redisCoordinator.disconnect().catch(() => undefined);
+      process.exit(1);
+    },
+  });
+
+  const shutdown = async (signal: string, exitCode = 0) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    stopTimers();
+    if (unsubscribeRedis) unsubscribeRedis();
+    await leadership.shutdown(signal);
+    await redisCoordinator.disconnect().catch(() => undefined);
+    process.exit(exitCode);
+  };
+
+  process.once('SIGINT', () => {
+    void shutdown('SIGINT', 0);
+  });
+  process.once('SIGTERM', () => {
+    void shutdown('SIGTERM', 0);
+  });
+  process.once('uncaughtException', (err) => {
+    aegisLogger.fatal('DISCORD', 'Uncaught exception in standalone bot process', {
+      meta: { error: err.message, stack: err.stack },
+    });
+    void shutdown('UNCAUGHT_EXCEPTION', 1);
+  });
+  process.once('unhandledRejection', (reason) => {
+    aegisLogger.fatal('DISCORD', 'Unhandled rejection in standalone bot process', {
+      meta: { error: reason instanceof Error ? reason.message : String(reason) },
+    });
+    void shutdown('UNHANDLED_REJECTION', 1);
+  });
+
   await ensureMongoConnected();
   if (env.redisConfigured) {
-    await redisCoordinator.ensureConnected();
-    const acquired = await redisCoordinator.acquireDistributedLock(
-      GATEWAY_OWNER_LOCK_KEY,
-      instanceId,
-      45_000
-    );
-    if (!acquired) {
-      aegisLogger.error('DISCORD', 'Another standalone bot instance already owns the Gateway lock', {
-        meta: { instanceId },
-      });
-      process.exit(1);
+    const redisState = await redisCoordinator.ensureConnected();
+    if (redisState !== 'CONNECTED') {
+      aegisLogger.fatal(
+        'REDIS',
+        'Fail-closed shutdown: REDIS_URL is configured but Redis is unavailable; refusing uncoordinated Gateway boot',
+        { meta: { instanceId: leadership.instanceId, redisState } }
+      );
+      await shutdown('REDIS_UNAVAILABLE_ON_BOOT', 1);
+      return;
     }
+  }
+
+  const initialLock = await leadership.acquireLeadership();
+  if (!initialLock.acquired) {
+    aegisLogger.error('DISCORD', 'Failed acquiring exclusive Gateway distributed lock', {
+      meta: {
+        instanceId: leadership.instanceId,
+        reason: initialLock.reason,
+        fencingToken: initialLock.fencingToken,
+      },
+    });
+    await shutdown(`LOCK_NOT_ACQUIRED:${initialLock.reason}`, 1);
+    return;
   }
 
   // Pull authoritative MongoDB state and flush pending sync outbox before accepting Gateway traffic
@@ -115,7 +195,7 @@ async function startBot() {
 
   const configuredShards = Number.parseInt(process.env.DISCORD_SHARD_COUNT || '', 10);
 
-  const client = new Client({
+  client = new Client({
     intents,
     shards: Number.isFinite(configuredShards) && configuredShards > 0 ? configuredShards : 'auto',
     makeCache: Options.cacheWithLimits({
@@ -142,17 +222,28 @@ async function startBot() {
   });
 
   let lastSlashSyncAt: string | null = null;
-  let heartbeatTimer: NodeJS.Timeout | null = null;
-  let reconcileTimer: NodeJS.Timeout | null = null;
 
   // Authoritative cross-container Redis sync & remote control subscription
-  const unsubscribeRedis = redisCoordinator.subscribe(async (msg) => {
+  unsubscribeRedis = redisCoordinator.subscribe(async (msg) => {
+    if (!leadership.canProcessEvents()) return;
     if (msg.originProcessId && msg.originProcessId === aegisStore.instanceId) {
       return;
     }
 
+    const payloadObj =
+      typeof msg.payload === 'object' && msg.payload !== null
+        ? (msg.payload as Record<string, unknown>)
+        : null;
+    const deliveryId = typeof payloadObj?.deliveryId === 'string' ? payloadObj.deliveryId : null;
+    if (!aegisStore.claimDeliveryId(deliveryId)) {
+      return;
+    }
+    if (!aegisStore.acceptGatewayFencingToken(msg.fencingToken)) {
+      return;
+    }
+
     if (msg.channel === 'aegis:bot:control') {
-      if (msg.event === 'DEPLOY_SLASH_COMMANDS' && client.isReady()) {
+      if (msg.event === 'DEPLOY_SLASH_COMMANDS' && client?.isReady()) {
         const appId = await resolveAppId(env.discordBotToken, client);
         if (appId) {
           await syncAllGuildSlashCommands(env.discordBotToken, appId, client);
@@ -160,6 +251,7 @@ async function startBot() {
         }
       } else if (msg.event === 'RECONCILE_ALL' || msg.event === 'RESTART_CLUSTER') {
         await aegisStore.reconcileGuildConfigsFromMongo();
+        await aegisStore.reconcileGlobalBansFromMongo();
       }
       return;
     }
@@ -168,20 +260,28 @@ async function startBot() {
       await aegisStore.reconcileGuildConfigsFromMongo(msg.guildId);
       aegisStore.l1Cache.invalidateByPrefix(`guild:${msg.guildId}:`);
     } else {
+      await aegisStore.reconcileGlobalBansFromMongo();
       aegisStore.reloadFromDiskIfNewer();
       aegisStore.l1Cache.invalidateByPrefix('global:');
     }
   });
 
   redisCoordinator.onReconnect(() => {
+    if (!leadership.canProcessEvents()) return;
     void (async () => {
+      const renewal = await leadership.verifyAndRenewLeadership();
+      if (!renewal.acquired) return;
       await flushPendingSyncOutbox(aegisStore.instanceId);
       await aegisStore.reconcileGuildConfigsFromMongo();
+      await aegisStore.reconcileGlobalBansFromMongo();
     })();
   });
 
   attachAegisBotHandlers(client, {
+    canProcessEvents: () => leadership.canProcessEvents(),
+    trackOperation: (p) => leadership.trackCriticalOperation(p),
     onGuildJoined: async (guildId) => {
+      if (!client || !leadership.canProcessEvents()) return;
       const appId = await resolveAppId(env.discordBotToken, client);
       if (!appId) return;
       const rest = new REST({ version: '10', timeout: 10_000 }).setToken(env.discordBotToken);
@@ -201,14 +301,25 @@ async function startBot() {
   client.on(Events.Error, (err) => {
     aegisTelemetry.recordError(undefined, err.message);
     aegisLogger.error('DISCORD', 'Discord Gateway client error', {
-      meta: { error: err.message },
+      meta: { error: err.message, fencingToken: leadership.getFencingToken() },
     });
   });
 
+  client.on(Events.Invalidated, () => {
+    aegisLogger.fatal('DISCORD', 'Discord Gateway session invalidated; terminating controlled shutdown');
+    void shutdown('DISCORD_SESSION_INVALIDATED', 1);
+  });
+
   client.once(Events.ClientReady, async (readyClient) => {
+    if (!leadership.canProcessEvents()) {
+      await readyClient.destroy().catch(() => undefined);
+      return;
+    }
+
     aegisLogger.info('DISCORD', 'Standalone Gateway bot ready', {
       meta: {
-        instanceId,
+        instanceId: leadership.instanceId,
+        fencingToken: leadership.getFencingToken(),
         tag: readyClient.user.tag,
         guilds: readyClient.guilds.cache.size,
       },
@@ -267,7 +378,10 @@ async function startBot() {
       }
 
       if (updatedAny) {
-        await aegisStore.commitMutation('guild:list_synced');
+        await aegisStore.commitMutation('guild:list_synced', undefined, undefined, {
+          updatedBy: `bot:${leadership.instanceId}`,
+          fencingToken: leadership.getFencingToken(),
+        });
       }
     } catch (err) {
       aegisLogger.warn('DISCORD', 'Guild startup state reconciliation warning', {
@@ -286,8 +400,15 @@ async function startBot() {
     }
 
     const publishHeartbeat = async () => {
+      if (!leadership.canProcessEvents()) return;
+
+      const renewal = await leadership.verifyAndRenewLeadership();
+      if (!renewal.acquired) {
+        return; // LeadershipController already handles NO_LEADER + disconnect + abort
+      }
+
       if (redisCoordinator.getStatus() !== 'CONNECTED') return;
-      await redisCoordinator.acquireDistributedLock(GATEWAY_OWNER_LOCK_KEY, instanceId, 45_000);
+
       const telemetry = aegisTelemetry.getSnapshot();
       const userCount = readyClient.guilds.cache.reduce(
         (sum, g) => sum + (g.memberCount || 0),
@@ -344,8 +465,10 @@ async function startBot() {
 
       await redisCoordinator.setBotHeartbeat({
         updatedAt: Date.now(),
-        instanceId,
+        instanceId: leadership.instanceId,
         pid: process.pid,
+        leaderState: leadership.getState(),
+        fencingToken: leadership.getFencingToken(),
         tag: readyClient.user.tag,
         id: readyClient.user.id,
         avatarUrl: readyClient.user.displayAvatarURL({ size: 256 }),
@@ -385,26 +508,12 @@ async function startBot() {
     }, 15_000);
 
     reconcileTimer = setInterval(() => {
+      if (!leadership.canProcessEvents()) return;
+      aegisStore.joinWindow.pruneExpiredBuckets();
       void aegisStore.reconcileGuildConfigsFromMongo();
+      void aegisStore.reconcileGlobalBansFromMongo();
       void flushPendingSyncOutbox(aegisStore.instanceId);
     }, 60_000);
-  });
-
-  const shutdown = async (signal: string) => {
-    aegisLogger.info('SYSTEM', `Shutting down standalone bot (${signal})`, { meta: { instanceId } });
-    if (heartbeatTimer) clearInterval(heartbeatTimer);
-    if (reconcileTimer) clearInterval(reconcileTimer);
-    unsubscribeRedis();
-    await client.destroy().catch(() => undefined);
-    await redisCoordinator.disconnect();
-    process.exit(0);
-  };
-
-  process.once('SIGINT', () => {
-    void shutdown('SIGINT');
-  });
-  process.once('SIGTERM', () => {
-    void shutdown('SIGTERM');
   });
 
   await client.login(env.discordBotToken);

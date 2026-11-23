@@ -982,6 +982,28 @@ export function OverviewView({
               <HealthBadge label={t.overview.infrastructure.apiStatus} state={data.systemHealth.api} language={language} />
               <HealthBadge label={t.overview.infrastructure.mongodbStatus} state={data.systemHealth.mongodb} language={language} />
               <HealthBadge label={t.overview.infrastructure.redisStatus} state={data.systemHealth.redis} language={language} />
+              {data.systemHealth.workerHealth && (
+                <HealthBadge
+                  label="Worker"
+                  state={
+                    data.systemHealth.workerHealth.status === 'ACTIVE' ||
+                    data.systemHealth.workerHealth.status === 'IDLE'
+                      ? 'ONLINE'
+                      : data.systemHealth.workerHealth.status === 'DEGRADED'
+                      ? 'DEGRADED'
+                      : 'OFFLINE'
+                  }
+                  language={language}
+                />
+              )}
+              {data.systemHealth.gatewayLeadership && (
+                <div className="flex items-center justify-between pt-1 text-[11px] font-mono tabular-nums text-slate-600 dark:text-slate-400">
+                  <span>{isEs ? 'Liderazgo Gateway' : 'Gateway Leadership'}</span>
+                  <span className="text-slate-800 dark:text-slate-300 font-semibold">
+                    {data.systemHealth.gatewayLeadership.leaderState}
+                  </span>
+                </div>
+              )}
               <div className="flex items-center justify-between pt-1 text-[11px] font-mono tabular-nums text-slate-600 dark:text-slate-400">
                 <span className="flex items-center gap-1">
                   <Cpu className="w-3 h-3 text-[#5865F2]" />

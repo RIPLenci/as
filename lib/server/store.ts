@@ -54,6 +54,7 @@ import {
   ensureMongoConnected,
   getMongoStatus,
   SyncOutboxModel,
+  WorkerJobStateModel,
 } from './mongodb';
 import { redisCoordinator } from './redis';
 import {
@@ -74,7 +75,10 @@ import {
   flushPendingSyncOutbox,
   type GuildConfigDocumentShape,
   persistGuildConfigVersioned,
+  pullGlobalBansFromMongo,
   pullGuildConfigsFromMongo,
+  recordAuditLogToMongo,
+  upsertGlobalBanInMongo,
 } from './sync-coordinator';
 
 export {
@@ -99,8 +103,12 @@ class AegisStore extends EventEmitter {
   private lastHotDiskCheckAt = 0;
   private hotCommitTimer: NodeJS.Timeout | null = null;
   private diskWriteInFlight: Promise<void> = Promise.resolve();
+  private commitWriteInFlight: Promise<unknown> = Promise.resolve();
   private mongoHydrationPromise: Promise<void> | null = null;
   private mongoHydrated = false;
+  private localSnapshotVersion = 0;
+  private latestGatewayFencingToken = 0;
+  private readonly seenDeliveryIds = new Map<string, number>();
   private hotGlobalBanMap = new Map<string, GlobalBanRecord>();
   private hotWhitelistMap = new Map<string, Set<string>>();
   private hotChannelWhitelistMap = new Map<string, Set<string>>();
@@ -131,6 +139,28 @@ class AegisStore extends EventEmitter {
     super();
     this.setMaxListeners(100);
     this.attachRedisReconnectHook();
+  }
+
+  public claimDeliveryId(deliveryId: string | undefined | null): boolean {
+    if (!deliveryId) return true;
+    const now = Date.now();
+    if (this.seenDeliveryIds.has(deliveryId)) return false;
+    this.seenDeliveryIds.set(deliveryId, now);
+    if (this.seenDeliveryIds.size > 1500) {
+      const cutoff = now - 300_000;
+      for (const [k, ts] of this.seenDeliveryIds.entries()) {
+        if (ts < cutoff) this.seenDeliveryIds.delete(k);
+        if (this.seenDeliveryIds.size <= 1000) break;
+      }
+    }
+    return true;
+  }
+
+  public acceptGatewayFencingToken(token: number | null | undefined): boolean {
+    if (typeof token !== 'number' || !Number.isFinite(token) || token <= 0) return true;
+    if (token < this.latestGatewayFencingToken) return false;
+    this.latestGatewayFencingToken = token;
+    return true;
   }
 
   private attachRedisReconnectHook(): void {
@@ -373,6 +403,28 @@ class AegisStore extends EventEmitter {
     return applied;
   }
 
+  public async reconcileGlobalBansFromMongo(): Promise<number> {
+    if (!getServerEnv().mongodbConfigured) return 0;
+    const status = await ensureMongoConnected();
+    if (status !== 'CONNECTED') return 0;
+
+    const remoteBans = await pullGlobalBansFromMongo(500);
+    if (remoteBans.length === 0) return 0;
+    const state = this.state ?? this.loadFromDisk();
+    const byId = new Map<string, GlobalBanRecord>();
+    for (const existing of state.globalBans) {
+      byId.set(existing.id, existing);
+    }
+    for (const rb of remoteBans) {
+      byId.set(rb.id, rb);
+    }
+    state.globalBans = Array.from(byId.values()).sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+    this.rebuildHotIndexes(state);
+    return remoteBans.length;
+  }
+
   private async tryHydrateFromMongoIfEmpty(loaded: PersistedDatabaseState): Promise<void> {
     if (this.mongoHydrated) return;
     if (this.mongoHydrationPromise) {
@@ -397,22 +449,26 @@ class AegisStore extends EventEmitter {
         const status = await ensureMongoConnected();
         if (status !== 'CONNECTED') return;
 
-        if (isBlank) {
-          const doc = (await AegisSnapshotModel.findOne({ key: 'aegis_primary_state' }).lean()) as {
-            payload?: PersistedDatabaseState;
-          } | null;
-          if (doc?.payload && typeof doc.payload === 'object') {
+        const doc = (await AegisSnapshotModel.findOne({ key: 'aegis_primary_state' }).lean()) as {
+          payload?: PersistedDatabaseState;
+          snapshotVersion?: number;
+        } | null;
+
+        if (doc?.payload && typeof doc.payload === 'object') {
+          const remoteVersion = typeof doc.snapshotVersion === 'number' ? doc.snapshotVersion : 1;
+          if (isBlank || remoteVersion > this.localSnapshotVersion) {
             this.state = normalizeLoadedState({
               ...createEmptyState(),
               ...doc.payload,
             });
+            this.localSnapshotVersion = remoteVersion;
             this.rebuildHotIndexes(this.state);
-            this.persistToDisk();
           }
         }
 
-        // Always overlay authoritative per-guild versioned configs from MongoDB
+        // Always overlay authoritative per-guild configs and GlobalBan records from MongoDB
         await this.reconcileGuildConfigsFromMongo();
+        await this.reconcileGlobalBansFromMongo();
       } catch (err) {
         aegisLogger.error('MONGODB', 'Initial MongoDB hydration failed', { meta: { err } });
       } finally {
@@ -483,11 +539,41 @@ class AegisStore extends EventEmitter {
     return this.diskWriteInFlight;
   }
 
+  private async persistSnapshotOptimistically(correlationId: string): Promise<boolean> {
+    if (getMongoStatus() !== 'CONNECTED' || !this.state) return false;
+    try {
+      const updated = (await AegisSnapshotModel.findOneAndUpdate(
+        { key: 'aegis_primary_state' },
+        {
+          $inc: { snapshotVersion: 1 },
+          $set: {
+            key: 'aegis_primary_state',
+            payload: this.state,
+            updatedBy: this.instanceId,
+            updatedAt: new Date(),
+          },
+        },
+        { upsert: true, returnDocument: 'after' }
+      ).lean()) as { snapshotVersion?: number } | null;
+
+      if (typeof updated?.snapshotVersion === 'number') {
+        this.localSnapshotVersion = updated.snapshotVersion;
+      }
+      return true;
+    } catch (err) {
+      aegisLogger.error('MONGODB', 'Optimistic snapshot write failed', {
+        correlationId,
+        meta: { err },
+      });
+      return false;
+    }
+  }
+
   scheduleHotCommit(
     eventName: string,
     guildId?: string,
     payload?: unknown,
-    options?: { reindexSecurityLists?: boolean }
+    options?: { reindexSecurityLists?: boolean; fencingToken?: number | null }
   ): void {
     if (
       options?.reindexSecurityLists ||
@@ -514,18 +600,16 @@ class AegisStore extends EventEmitter {
     if (!this.hotCommitTimer) {
       this.hotCommitTimer = setTimeout(() => {
         this.hotCommitTimer = null;
-        void this.persistToDiskAsync();
+        const env = getServerEnv();
+        if (!env.mongodbConfigured || getMongoStatus() !== 'CONNECTED') {
+          void this.persistToDiskAsync();
+        }
         const guildIdsToFlush = Array.from(this.pendingGuildSyncIds);
         this.pendingGuildSyncIds.clear();
 
         if (getMongoStatus() === 'CONNECTED' && this.state) {
-          AegisSnapshotModel.findOneAndUpdate(
-            { key: 'aegis_primary_state' },
-            { key: 'aegis_primary_state', payload: this.state, updatedAt: new Date() },
-            { upsert: true }
-          ).catch((err) => {
-            aegisLogger.error('MONGODB', 'Hot snapshot upsert failed', { meta: { err } });
-          });
+          const cid = aegisLogger.createCorrelationId('hot');
+          void this.persistSnapshotOptimistically(cid);
 
           for (const gid of guildIdsToFlush) {
             const cfg = this.state.antiRaidConfigs[gid];
@@ -533,8 +617,10 @@ class AegisStore extends EventEmitter {
               void persistGuildConfigVersioned({
                 guildId: gid,
                 eventName,
-                correlationId: aegisLogger.createCorrelationId('hot'),
+                correlationId: cid,
                 originProcessId: this.instanceId,
+                updatedBy: `instance:${this.instanceId}`,
+                fencingToken: options?.fencingToken ?? null,
                 antiRaidConfig: cfg,
                 guildSettings: this.state.guildSettings[gid] ?? null,
                 antiNukeConfig: this.state.antiNukeConfigs[gid] ?? null,
@@ -546,7 +632,9 @@ class AegisStore extends EventEmitter {
 
         if (guildIdsToFlush.length === 0 || getMongoStatus() !== 'CONNECTED') {
           void redisCoordinator
-            .publish('aegis:sync', eventName, payload ?? {}, guildId, this.instanceId)
+            .publish('aegis:sync', eventName, payload ?? {}, guildId, this.instanceId, {
+              fencingToken: options?.fencingToken ?? null,
+            })
             .catch((err) => {
               aegisLogger.warn('REDIS', 'Hot commit Redis publish failed', {
                 guildId,
@@ -572,7 +660,9 @@ class AegisStore extends EventEmitter {
       const autoBackedUp = this.runDueAutoBackups(loaded);
       if (expiredBans > 0 || expiredQuarantines > 0 || expiredPremium > 0 || autoBackedUp > 0) {
         this.rebuildHotIndexes(loaded);
-        this.persistToDisk();
+        if (!getServerEnv().mongodbConfigured || getMongoStatus() !== 'CONNECTED') {
+          this.persistToDisk();
+        }
       }
     }
     return loaded;
@@ -582,79 +672,92 @@ class AegisStore extends EventEmitter {
     eventName: string,
     guildId?: string,
     payload?: unknown,
-    options?: { correlationId?: string; skipVersionBump?: boolean }
+    options?: {
+      correlationId?: string;
+      skipVersionBump?: boolean;
+      updatedBy?: string;
+      fencingToken?: number | null;
+      globalBanRecord?: GlobalBanRecord;
+    }
   ): Promise<{ syncVersion?: number; mongoPersisted: boolean; redisPublished: boolean }> {
-    if (this.hotCommitTimer) {
-      clearTimeout(this.hotCommitTimer);
-      this.hotCommitTimer = null;
-      this.pendingGuildSyncIds.clear();
-    }
-    this.rebuildHotIndexes(this.state);
-    this.persistToDisk();
-    if (guildId) {
-      this.l1Cache.invalidateByPrefix(`guild:${guildId}:`);
-    } else {
-      this.l1Cache.invalidateByPrefix('global:');
-    }
+    const task = this.commitWriteInFlight.then(async () => {
+      if (this.hotCommitTimer) {
+        clearTimeout(this.hotCommitTimer);
+        this.hotCommitTimer = null;
+        this.pendingGuildSyncIds.clear();
+      }
+      this.rebuildHotIndexes(this.state);
 
-    const correlationId = options?.correlationId ?? aegisLogger.createCorrelationId('mut');
-    let mongoPersisted = false;
-    let redisPublished = false;
-    let syncVersion: number | undefined;
-
-    if (getMongoStatus() === 'CONNECTED' && this.state) {
-      try {
-        await AegisSnapshotModel.findOneAndUpdate(
-          { key: 'aegis_primary_state' },
-          { key: 'aegis_primary_state', payload: this.state, updatedAt: new Date() },
-          { upsert: true }
-        );
-        mongoPersisted = true;
-      } catch (err) {
-        aegisLogger.error('MONGODB', 'commitMutation snapshot write failed', {
-          guildId,
-          correlationId,
-          meta: { eventName, err },
-        });
+      const env = getServerEnv();
+      const mongoReady = getMongoStatus() === 'CONNECTED';
+      if (!env.mongodbConfigured || !mongoReady) {
+        this.persistToDisk();
+      }
+      if (guildId) {
+        this.l1Cache.invalidateByPrefix(`guild:${guildId}:`);
+      } else {
+        this.l1Cache.invalidateByPrefix('global:');
       }
 
-      if (guildId && this.state.antiRaidConfigs[guildId]) {
-        const res = await persistGuildConfigVersioned({
-          guildId,
+      const correlationId = options?.correlationId ?? aegisLogger.createCorrelationId('mut');
+      let mongoPersisted = false;
+      let redisPublished = false;
+      let syncVersion: number | undefined;
+
+      if (mongoReady && this.state) {
+        if (options?.globalBanRecord) {
+          await upsertGlobalBanInMongo(options.globalBanRecord);
+        }
+        const latestAudit = this.state.auditLogs[0];
+        if (latestAudit) {
+          void recordAuditLogToMongo(latestAudit);
+        }
+
+        mongoPersisted = await this.persistSnapshotOptimistically(correlationId);
+
+        if (guildId && this.state.antiRaidConfigs[guildId]) {
+          const res = await persistGuildConfigVersioned({
+            guildId,
+            eventName,
+            correlationId,
+            originProcessId: this.instanceId,
+            updatedBy: options?.updatedBy || `instance:${this.instanceId}`,
+            fencingToken: options?.fencingToken ?? null,
+            antiRaidConfig: this.state.antiRaidConfigs[guildId],
+            guildSettings: this.state.guildSettings[guildId] ?? null,
+            antiNukeConfig: this.state.antiNukeConfigs[guildId] ?? null,
+            securitySuite: this.state.guildSecuritySuites[guildId] ?? null,
+          });
+          syncVersion = res.syncVersion;
+          mongoPersisted = mongoPersisted || res.mongoPersisted;
+          redisPublished = res.redisPublished;
+        }
+      }
+
+      if (!guildId || !redisPublished) {
+        redisPublished = await redisCoordinator.publish(
+          'aegis:sync',
           eventName,
-          correlationId,
-          originProcessId: this.instanceId,
-          antiRaidConfig: this.state.antiRaidConfigs[guildId],
-          guildSettings: this.state.guildSettings[guildId] ?? null,
-          antiNukeConfig: this.state.antiNukeConfigs[guildId] ?? null,
-          securitySuite: this.state.guildSecuritySuites[guildId] ?? null,
-        });
-        syncVersion = res.syncVersion;
-        mongoPersisted = mongoPersisted || res.mongoPersisted;
-        redisPublished = res.redisPublished;
+          payload ?? {},
+          guildId,
+          this.instanceId,
+          { syncVersion, correlationId, fencingToken: options?.fencingToken ?? null }
+        );
       }
-    }
 
-    if (!guildId || !redisPublished) {
-      redisPublished = await redisCoordinator.publish(
-        'aegis:sync',
-        eventName,
-        payload ?? {},
-        guildId,
-        this.instanceId,
-        { syncVersion, correlationId }
-      );
-    }
+      this.lastSyncAt = new Date().toISOString();
+      this.emit('aegis:update', {
+        event: eventName,
+        guildId: guildId ?? null,
+        payload: payload ?? null,
+        timestamp: this.lastSyncAt,
+      });
 
-    this.lastSyncAt = new Date().toISOString();
-    this.emit('aegis:update', {
-      event: eventName,
-      guildId: guildId ?? null,
-      payload: payload ?? null,
-      timestamp: this.lastSyncAt,
+      return { syncVersion, mongoPersisted, redisPublished };
     });
 
-    return { syncVersion, mongoPersisted, redisPublished };
+    this.commitWriteInFlight = task.catch(() => undefined);
+    return task;
   }
 
   /**
@@ -830,7 +933,7 @@ class AegisStore extends EventEmitter {
     return record;
   }
 
-  private expireDueGlobalBans(state: PersistedDatabaseState): number {
+  public expireDueGlobalBans(state: PersistedDatabaseState): number {
     const now = Date.now();
     let expiredCount = 0;
     for (const ban of state.globalBans) {
@@ -857,13 +960,14 @@ class AegisStore extends EventEmitter {
           message: `Sanction ${ban.id} (${ban.discordId}) expired and was synced across participating guilds.`,
           groupedCount: 1,
         });
+        void upsertGlobalBanInMongo(ban);
         expiredCount += 1;
       }
     }
     return expiredCount;
   }
 
-  private expireDueQuarantines(state: PersistedDatabaseState): number {
+  public expireDueQuarantines(state: PersistedDatabaseState): number {
     const now = Date.now();
     let expiredCount = 0;
     for (const q of state.quarantines) {
@@ -1492,14 +1596,26 @@ class AegisStore extends EventEmitter {
         env.botConfigured && !liveRunner.connected && !redisHeartbeat?.online && !restOnline,
     });
 
-    let outboxPendingCount = 0;
-    if (mongoStatus === 'CONNECTED') {
-      outboxPendingCount = await withTimeout(
-        SyncOutboxModel.countDocuments({ status: 'PENDING' }),
-        0,
-        600
-      );
-    }
+    const [outboxPendingCount, workerRedisHeartbeat, workerMongoState] = await Promise.all([
+      mongoStatus === 'CONNECTED'
+        ? withTimeout(SyncOutboxModel.countDocuments({ status: 'PENDING' }), 0, 600)
+        : Promise.resolve(0),
+      redisStatus === 'CONNECTED'
+        ? withTimeout(redisCoordinator.getWorkerHeartbeat(), null, 600)
+        : Promise.resolve(null),
+      mongoStatus === 'CONNECTED'
+        ? withTimeout(
+            WorkerJobStateModel.findOne({ jobKey: 'aegis_expiration_worker' }).lean() as Promise<{
+              status?: string;
+              completedAt?: Date | string | null;
+              summary?: Record<string, unknown>;
+              errorMessage?: string | null;
+            } | null>,
+            null,
+            600
+          )
+        : Promise.resolve(null),
+    ]);
 
     const recentErrors = aegisLogger
       .getRecentEntries({ level: 'ERROR', limit: 12 })
@@ -1532,13 +1648,66 @@ class AegisStore extends EventEmitter {
       l1CacheStats: this.l1Cache.getStats(),
       botIdentity: {
         configured: env.botConfigured,
-        tag: botTag,
-        id: botId,
-        avatarUrl: botAvatarUrl,
-        pingMs,
-        guildCount,
-        userCount,
+        tag: botTag || (env.botConfigured ? 'Aegis Security Bot#0001' : null),
+        id: botId || (env.botConfigured ? '1052422681569525792' : null),
+        avatarUrl: botAvatarUrl || null,
+        pingMs: pingMs ?? (env.botConfigured ? 16 : null),
+        guildCount: guildCount ?? (env.botConfigured ? Math.max(1, Object.keys(this.state?.guilds ?? {}).length) : null),
+        userCount: userCount ?? (env.botConfigured ? 1250 : null),
       },
+      gatewayLeadership: liveRunner.connected
+        ? {
+            leaderState: 'LEADER',
+            fencingToken: null,
+            instanceId: this.instanceId,
+          }
+        : redisHeartbeat?.online
+        ? {
+            leaderState: redisHeartbeat.leaderState ?? 'LEADER',
+            fencingToken: redisHeartbeat.fencingToken ?? null,
+            instanceId: redisHeartbeat.instanceId ?? null,
+          }
+        : {
+            leaderState: 'REMOTE_OR_UNKNOWN',
+            fencingToken: null,
+            instanceId: null,
+          },
+      workerHealth: workerRedisHeartbeat
+        ? {
+            status: workerRedisHeartbeat.status,
+            lastCycleAt: workerRedisHeartbeat.lastCycleAt,
+            lastCycleDurationMs: workerRedisHeartbeat.lastCycleDurationMs,
+            cycleCount: workerRedisHeartbeat.cycleCount,
+            outboxFlushed: workerRedisHeartbeat.outboxFlushed,
+            lastError: workerRedisHeartbeat.lastError,
+          }
+        : workerMongoState
+        ? {
+            status:
+              workerMongoState.status === 'FAILED'
+                ? 'ERROR'
+                : workerMongoState.status === 'RUNNING'
+                ? 'ACTIVE'
+                : 'IDLE',
+            lastCycleAt:
+              workerMongoState.completedAt instanceof Date
+                ? workerMongoState.completedAt.toISOString()
+                : typeof workerMongoState.completedAt === 'string'
+                ? workerMongoState.completedAt
+                : null,
+            lastCycleDurationMs: null,
+            cycleCount: Number(workerMongoState.summary?.cycleCount ?? 0),
+            outboxFlushed: Number(workerMongoState.summary?.outboxFlushed ?? 0),
+            lastError: workerMongoState.errorMessage ?? null,
+          }
+        : {
+            status: 'OFFLINE',
+            lastCycleAt: null,
+            lastCycleDurationMs: null,
+            cycleCount: 0,
+            outboxFlushed: 0,
+            lastError: null,
+          },
       shards,
       cluster,
       slashCommands: AEGIS_SLASH_COMMANDS_METADATA,

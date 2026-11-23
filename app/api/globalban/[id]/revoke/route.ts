@@ -52,6 +52,6 @@ export async function POST(
     metadata: { discordId: ban.discordId, reason: parsed.data.reason },
   });
 
-  await aegisStore.commitMutation('globalban:revoked', undefined, { ban });
+  await aegisStore.commitMutation('globalban:revoked', undefined, { ban }, { globalBanRecord: ban });
   return NextResponse.json({ ban });
 }

@@ -8,6 +8,7 @@ import {
   verifyMutationOrigin,
 } from '@/lib/server/auth-guard';
 import { aegisLogger } from '@/lib/server/logger';
+import { enforceRateLimit } from '@/lib/server/rate-limit';
 import { aegisStore } from '@/lib/server/store';
 
 const testSchema = z.object({
@@ -29,6 +30,14 @@ export async function POST(
 
   const auth = await requireAuthenticatedUser();
   if (!auth.ok) return auth.response;
+
+  const rlErr = await enforceRateLimit(req, {
+    bucket: 'antiraid_test',
+    userId: auth.ctx.user.id,
+    limit: 15,
+    windowSeconds: 60,
+  });
+  if (rlErr) return rlErr;
 
   const { guildId } = await context.params;
   const guard = requireGuildAuthorization(auth.ctx, guildId, 'antiraid:write');

@@ -113,6 +113,6 @@ export async function POST(req: NextRequest) {
     },
   });
 
-  await aegisStore.commitMutation('globalban:created', undefined, { ban });
+  await aegisStore.commitMutation('globalban:created', undefined, { ban }, { globalBanRecord: ban });
   return NextResponse.json({ ban }, { status: 201 });
 }

@@ -568,6 +568,16 @@ export interface SlashCommandDefinition {
   status: 'DEPLOYED' | 'GLOBAL_SYNCED';
 }
 
+export type OperationalStatusCode =
+  | 'ACTIVE'
+  | 'DISABLED'
+  | 'INITIALIZING'
+  | 'SYNCING'
+  | 'DEGRADED'
+  | 'DISCONNECTED'
+  | 'ERROR'
+  | 'PERMISSION_DENIED';
+
 export interface SystemHealthSnapshot {
   api: ServiceHealthState;
   mongodb: ServiceHealthState;
@@ -590,6 +600,19 @@ export interface SystemHealthSnapshot {
     pingMs: number | null;
     guildCount: number | null;
     userCount?: number | null;
+  };
+  gatewayLeadership?: {
+    leaderState: 'INITIALIZING' | 'LEADER' | 'NO_LEADER' | 'SHUTTING_DOWN' | 'REMOTE_OR_UNKNOWN';
+    fencingToken: number | null;
+    instanceId: string | null;
+  };
+  workerHealth?: {
+    status: 'ACTIVE' | 'IDLE' | 'DEGRADED' | 'ERROR' | 'SHUTTING_DOWN' | 'OFFLINE';
+    lastCycleAt: string | null;
+    lastCycleDurationMs: number | null;
+    cycleCount: number;
+    outboxFlushed: number;
+    lastError: string | null;
   };
   shards?: BotShardTelemetry[];
   cluster?: BotClusterTelemetry;

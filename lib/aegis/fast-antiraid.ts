@@ -68,6 +68,7 @@ export class RaidBurstShield {
 }
 
 export interface FastJoinInput {
+  correlationId?: string;
   guildId: string;
   targetUserId?: string;
   accountAgeDays: number;
@@ -103,6 +104,7 @@ export function evaluateFastJoinMitigation(input: FastJoinInput): FastJoinDecisi
 
   if (!config.enabled) {
     const disabledEval = evaluateJoinRisk({
+      correlationId: input.correlationId,
       guildId: input.guildId,
       targetUserId: input.targetUserId,
       accountAgeDays: input.accountAgeDays,
@@ -110,6 +112,7 @@ export function evaluateFastJoinMitigation(input: FastJoinInput): FastJoinDecisi
       hasAvatar: input.hasAvatar,
       joinsInWindow: 0,
       maxJoinsThreshold: config.maxJoins,
+      riskThreshold: config.riskThreshold,
       similarUsernameCount: 0,
       repetitiveJoinCount: 0,
       hasActiveGlobalBan: false,
@@ -139,6 +142,7 @@ export function evaluateFastJoinMitigation(input: FastJoinInput): FastJoinDecisi
     : input.joinsInWindow;
 
   const evaluation = evaluateJoinRisk({
+    correlationId: input.correlationId,
     guildId: input.guildId,
     targetUserId: input.targetUserId,
     accountAgeDays: input.accountAgeDays,
@@ -146,6 +150,7 @@ export function evaluateFastJoinMitigation(input: FastJoinInput): FastJoinDecisi
     hasAvatar: input.hasAvatar,
     joinsInWindow: effectiveJoins,
     maxJoinsThreshold: config.maxJoins,
+    riskThreshold: config.riskThreshold,
     similarUsernameCount: input.similarUsernameCount,
     repetitiveJoinCount: input.repetitiveJoinCount,
     hasActiveGlobalBan: false,

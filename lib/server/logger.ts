@@ -14,6 +14,8 @@ export type LogCategory =
   | 'SANCTION'
   | 'AUTH'
   | 'WORKER'
+  | 'GLOBALBAN'
+  | 'AUDIT'
   | 'SYSTEM';
 
 export interface StructuredLogEntry {

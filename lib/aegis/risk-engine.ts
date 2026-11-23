@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import type {
   AntiRaidConfigRecord,
   AutoAction,
@@ -15,6 +16,7 @@ export interface EnabledDetectorsInput {
 }
 
 export interface RiskEvaluationInput {
+  correlationId?: string;
   guildId?: string;
   targetUserId?: string;
   accountAgeDays: number;
@@ -27,6 +29,7 @@ export interface RiskEvaluationInput {
   repetitiveJoinCount: number;
   hasActiveGlobalBan: boolean;
   mode: ProtectionMode;
+  riskThreshold?: number;
   weights: RiskWeightConfig;
   rules?: AntiRaidConfigRecord['riskRules'];
   enabledDetectors?: EnabledDetectorsInput;
@@ -35,11 +38,20 @@ export interface RiskEvaluationInput {
 }
 
 export interface RiskEvaluationResult {
+  correlationId: string;
   guildId?: string;
   targetUserId?: string;
   score: number;
   level: RiskLevel;
   signals: RiskSignalContribution[];
+  activatedDetectors: string[];
+  discardedDetectors: string[];
+  appliedConfig: {
+    mode: ProtectionMode;
+    maxJoinsThreshold: number;
+    riskThreshold: number | null;
+    weights: RiskWeightConfig;
+  };
   recommendedAction: AutoAction;
   safeguardApplied: string | null;
   explanation: string;
@@ -83,6 +95,8 @@ function getModeMultiplier(mode: ProtectionMode): number {
  * - Enforces non-punitive caps in MONITORING ('LOG_ONLY') and ALERT_ONLY ('ALERT') modes.
  */
 export function evaluateJoinRisk(input: RiskEvaluationInput): RiskEvaluationResult {
+  const correlationId =
+    input.correlationId || `rsk_${crypto.randomBytes(4).toString('hex')}`;
   const weights = input.weights;
   const det = {
     suspiciousAccount: input.enabledDetectors?.suspiciousAccountDetection ?? true,
@@ -217,6 +231,27 @@ export function evaluateJoinRisk(input: RiskEvaluationInput): RiskEvaluationResu
     },
   ];
 
+  const activatedDetectors: string[] = [];
+  const discardedDetectors: string[] = [];
+
+  if (det.suspiciousAccount && ageRaw > 0) activatedDetectors.push('suspiciousAccountDetection');
+  else discardedDetectors.push('suspiciousAccountDetection');
+
+  if (det.botJoin && input.isBot) activatedDetectors.push('botJoinDetection');
+  else discardedDetectors.push('botJoinDetection');
+
+  if (det.joinPattern && (input.similarUsernameCount >= 2 || repetitiveRaw > 0)) {
+    activatedDetectors.push('joinPatternDetection');
+  } else {
+    discardedDetectors.push('joinPatternDetection');
+  }
+
+  if (det.burst && volumeRaw > 0) activatedDetectors.push('burstDetection');
+  else discardedDetectors.push('burstDetection');
+
+  if (input.hasActiveGlobalBan) activatedDetectors.push('globalBanNetwork');
+  else discardedDetectors.push('globalBanNetwork');
+
   const baseSum = signals.reduce((acc, s) => acc + s.weightedPoints, 0);
   const multiplied = baseSum * getModeMultiplier(input.mode);
   const finalScore = Math.max(0, Math.min(100, Math.round(multiplied)));
@@ -279,11 +314,20 @@ export function evaluateJoinRisk(input: RiskEvaluationInput): RiskEvaluationResu
     : `Score ${finalScore}/100 (${level}, mode=${input.mode}): sin señales activas de riesgo.`;
 
   return {
+    correlationId,
     guildId: input.guildId,
     targetUserId: input.targetUserId,
     score: finalScore,
     level,
     signals,
+    activatedDetectors,
+    discardedDetectors,
+    appliedConfig: {
+      mode: input.mode,
+      maxJoinsThreshold: input.maxJoinsThreshold,
+      riskThreshold: typeof input.riskThreshold === 'number' ? input.riskThreshold : null,
+      weights,
+    },
     recommendedAction,
     safeguardApplied,
     explanation,

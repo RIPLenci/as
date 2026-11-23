@@ -10,6 +10,7 @@ import {
   PLAN_CATALOG,
 } from '@/lib/aegis/premium';
 import { requireSuperOwner, verifyMutationOrigin } from '@/lib/server/auth-guard';
+import { enforceRateLimit } from '@/lib/server/rate-limit';
 import { aegisStore } from '@/lib/server/store';
 
 export const dynamic = 'force-dynamic';
@@ -85,6 +86,14 @@ export async function POST(req: NextRequest) {
 
   const auth = await requireSuperOwner();
   if (!auth.ok) return auth.response;
+
+  const rlErr = await enforceRateLimit(req, {
+    bucket: 'admin_premium',
+    userId: auth.ctx.user.id,
+    limit: 60,
+    windowSeconds: 60,
+  });
+  if (rlErr) return rlErr;
 
   const { state, user } = auth.ctx;
   const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
